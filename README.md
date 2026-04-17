@@ -1,6 +1,6 @@
 # Edge–Cloud Replication
 
-[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+[![CI](https://github.com/Hammad911/Edge_Cloud/actions/workflows/ci.yml/badge.svg)](https://github.com/Hammad911/Edge_Cloud/actions/workflows/ci.yml)
 [![Go Version](https://img.shields.io/badge/go-1.25%2B-00ADD8)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -32,8 +32,8 @@ What already works:
 Clone and build:
 
 ```bash
-git clone https://github.com/OWNER/REPO.git
-cd REPO
+git clone https://github.com/Hammad911/Edge_Cloud.git
+cd Edge_Cloud
 make build
 ```
 
