@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package edgecloud.kv.v1;
+
+option go_package = "edge-cloud-replication/gen/proto/edgecloud/kv/v1;kvv1";
+
+// KV is the client-facing key/value API exposed by every edge node.
+//
+// Callers are expected to pass the CausalToken they received from their
+// previous response back on every subsequent request. This is how the
+// server enforces read-your-writes and monotonic reads across nodes:
+// a read will block (or fail fast) until the replica has applied every
+// write captured in the incoming token.
+service KV {
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Put(PutRequest) returns (PutResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+}
+
+// CausalToken is the opaque session metadata carried by a client to express
+// causal dependencies on prior operations. Clients should treat the token as
+// opaque; semantics are owned by the server.
+//
+// For the single-site milestone this is just an HLC timestamp. The field is
+// reserved to be extended with a partitioned (per-group) view once the
+// cross-cluster layer is in place.
+message CausalToken {
+  int64 physical = 1;
+  uint32 logical = 2;
+}
+
+message GetRequest {
+  string key = 1;
+  CausalToken after = 2; // caller's causal read bound (optional)
+}
+
+message GetResponse {
+  bytes value = 1;
+  bool found = 2;
+  CausalToken token = 3; // updated causal token to carry forward
+}
+
+message PutRequest {
+  string key = 1;
+  bytes value = 2;
+  CausalToken after = 3; // caller's causal dependency (optional)
+}
+
+message PutResponse {
+  CausalToken token = 1;
+}
+
+message DeleteRequest {
+  string key = 1;
+  CausalToken after = 2;
+}
+
+message DeleteResponse {
+  CausalToken token = 1;
+}

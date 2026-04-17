@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package edgecloud.replication.v1;
 
-option go_package = "edge-cloud-replication/gen/edgecloud/replication/v1;replicationv1";
+option go_package = "edge-cloud-replication/gen/proto/edgecloud/replication/v1;replicationv1";
 
 // Inter-cluster replication (placeholder).
 service Replication {

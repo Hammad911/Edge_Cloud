@@ -55,12 +55,7 @@ proto-tools:
 
 .PHONY: proto
 proto:
-	@which protoc >/dev/null || (echo "install protoc first"; exit 1)
-	mkdir -p gen
-	protoc -I proto \
-		--go_out=gen --go_opt=paths=source_relative \
-		--go-grpc_out=gen --go-grpc_opt=paths=source_relative \
-		proto/*.proto
+	PATH="$$(go env GOPATH)/bin:$$PATH" ./scripts/proto_gen.sh
 
 # ---- run helpers ----
 .PHONY: run-edge

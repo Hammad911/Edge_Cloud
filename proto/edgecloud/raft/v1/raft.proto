@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package edgecloud.raft.v1;
 
-option go_package = "edge-cloud-replication/gen/edgecloud/raft/v1;raftv1";
+option go_package = "edge-cloud-replication/gen/proto/edgecloud/raft/v1;raftv1";
 
 // Raft RPCs (placeholder; expand during implementation).
 service Raft {
