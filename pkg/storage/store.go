@@ -72,8 +72,8 @@ type Store interface {
 // MemStore is an in-memory implementation of Store. Versions per key are
 // stored as an append-only slice kept in strictly ascending timestamp order.
 type MemStore struct {
-	mu       sync.RWMutex
-	data     map[string][]Version
+	mu          sync.RWMutex
+	data        map[string][]Version
 	maxVersions int
 }
 

@@ -38,12 +38,12 @@ type NodeConfig struct {
 
 // AdminConfig controls the HTTP admin surface (health, metrics, pprof).
 type AdminConfig struct {
-	ListenAddr     string        `mapstructure:"listen_addr"`
-	ReadTimeout    time.Duration `mapstructure:"read_timeout"`
-	WriteTimeout   time.Duration `mapstructure:"write_timeout"`
-	ShutdownGrace  time.Duration `mapstructure:"shutdown_grace"`
-	EnablePprof    bool          `mapstructure:"enable_pprof"`
-	EnableMetrics  bool          `mapstructure:"enable_metrics"`
+	ListenAddr    string        `mapstructure:"listen_addr"`
+	ReadTimeout   time.Duration `mapstructure:"read_timeout"`
+	WriteTimeout  time.Duration `mapstructure:"write_timeout"`
+	ShutdownGrace time.Duration `mapstructure:"shutdown_grace"`
+	EnablePprof   bool          `mapstructure:"enable_pprof"`
+	EnableMetrics bool          `mapstructure:"enable_metrics"`
 }
 
 // GRPCConfig controls the data-plane gRPC server.
