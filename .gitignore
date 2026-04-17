@@ -1,0 +1,19 @@
+bin/
+data/
+*.log
+*.prof
+coverage.out
+coverage.html
+
+.DS_Store
+
+.idea/
+.vscode/
+*.swp
+
+# stray root-level binaries from `go build` without -o
+/edge-node
+/cloud-node
+/simulator
+/checker
+/benchmark

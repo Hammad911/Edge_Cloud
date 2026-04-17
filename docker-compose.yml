@@ -1,0 +1,42 @@
+services:
+  cloud:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.cloud
+    environment:
+      ECR_ADMIN_LISTEN_ADDR: "0.0.0.0:9081"
+      ECR_GRPC_LISTEN_ADDR: "0.0.0.0:9001"
+      ECR_NODE_ID: "cloud-1"
+    ports:
+      - "9001:9001"
+      - "9081:9081"
+
+  edge-1:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.edge
+    environment:
+      ECR_ADMIN_LISTEN_ADDR: "0.0.0.0:8081"
+      ECR_GRPC_LISTEN_ADDR: "0.0.0.0:7001"
+      ECR_NODE_ID: "edge-1"
+      ECR_REPLICATION_CLOUD_ADDR: "cloud:9001"
+    ports:
+      - "7001:7001"
+      - "8081:8081"
+    depends_on:
+      - cloud
+
+  edge-2:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.edge
+    environment:
+      ECR_ADMIN_LISTEN_ADDR: "0.0.0.0:8081"
+      ECR_GRPC_LISTEN_ADDR: "0.0.0.0:7001"
+      ECR_NODE_ID: "edge-2"
+      ECR_REPLICATION_CLOUD_ADDR: "cloud:9001"
+    ports:
+      - "7002:7001"
+      - "8082:8081"
+    depends_on:
+      - cloud

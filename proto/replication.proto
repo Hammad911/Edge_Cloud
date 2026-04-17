@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package edgecloud.replication.v1;
+
+option go_package = "edge-cloud-replication/gen/edgecloud/replication/v1;replicationv1";
+
+// Inter-cluster replication (placeholder).
+service Replication {
+  rpc PushUpdate(PushUpdateRequest) returns (PushUpdateResponse);
+}
+
+message PushUpdateRequest {
+  string source_site = 1;
+  string key = 2;
+  bytes value = 3;
+  bytes metadata = 4; // HLC / partitioned clock / deps (future)
+}
+
+message PushUpdateResponse {
+  bool accepted = 1;
+}
+

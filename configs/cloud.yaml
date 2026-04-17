@@ -1,0 +1,16 @@
+node:
+  id: "cloud-1"
+  role: "cloud"
+  datacenter: "cloud-east"
+
+admin:
+  listen_addr: "127.0.0.1:9081"
+  enable_metrics: true
+
+grpc:
+  listen_addr: "127.0.0.1:9001"
+  enable_reflection: true
+
+logging:
+  level: "info"
+  format: "text"

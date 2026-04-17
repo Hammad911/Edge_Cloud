@@ -1,0 +1,18 @@
+FROM golang:1.25-alpine AS builder
+WORKDIR /src
+RUN apk add --no-cache git ca-certificates
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build \
+        -trimpath \
+        -ldflags "-X edge-cloud-replication/internal/app.Version=${VERSION} -s -w" \
+        -o /out/cloud-node ./cmd/cloud-node
+
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=builder /out/cloud-node /cloud-node
+COPY configs/cloud.yaml /etc/ecr/cloud.yaml
+EXPOSE 9001 9081
+USER nonroot:nonroot
+ENTRYPOINT ["/cloud-node", "-config", "/etc/ecr/cloud.yaml"]

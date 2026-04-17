@@ -1,0 +1,38 @@
+node:
+  id: "edge-1"
+  role: "edge"
+  datacenter: "dc-1"
+
+admin:
+  listen_addr: "127.0.0.1:8081"
+  read_timeout: "5s"
+  write_timeout: "30s"
+  shutdown_grace: "10s"
+  enable_metrics: true
+  enable_pprof: false
+
+grpc:
+  listen_addr: "127.0.0.1:7001"
+  max_recv_msg_bytes: 16777216
+  max_send_msg_bytes: 16777216
+  keepalive_interval: "30s"
+  keepalive_timeout: "10s"
+  enable_reflection: true
+  shutdown_grace: "10s"
+
+raft:
+  enabled: false
+  cluster_id: "edge-cluster-1"
+  bind: "127.0.0.1:7101"
+  peers: []
+  data_dir: "./data/raft"
+
+replication:
+  enabled: false
+  cloud_addr: "127.0.0.1:9001"
+  peers: []
+  buffer_dir: "./data/buffer"
+
+logging:
+  level: "info"
+  format: "text"
