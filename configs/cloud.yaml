@@ -1,16 +1,30 @@
 node:
-  id: "cloud-1"
-  role: "cloud"
-  datacenter: "cloud-east"
+  id: cloud-0
+  role: cloud
+  region: us-east
 
 admin:
-  listen_addr: "127.0.0.1:9081"
-  enable_metrics: true
+  listen_addr: 127.0.0.1:9081
+  enable_pprof: false
 
 grpc:
-  listen_addr: "127.0.0.1:9001"
-  enable_reflection: true
+  listen_addr: 127.0.0.1:9001
+  reflection: true
+
+raft:
+  enabled: false
+
+replication:
+  enabled: true
+  group_id: cloud
+  outbox_capacity: 10000
+  buffer_dir: ./data/cloud-0/buffer
+  peers:
+    - name: edge-a
+      addr: 127.0.0.1:7011
+    - name: edge-b
+      addr: 127.0.0.1:7021
 
 logging:
-  level: "info"
-  format: "text"
+  level: info
+  format: text

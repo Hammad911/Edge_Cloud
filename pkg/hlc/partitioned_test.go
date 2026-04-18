@@ -36,6 +36,9 @@ func TestPartitionedClock_Merge_TracksRemoteGroups(t *testing.T) {
 	fb.Set(700)
 	pb := NewPartitionedClock("dc-b", New(WithPhysicalClock(fb.Now)))
 
+	// pa stamps a local write so its own entry exists.
+	_ = pa.Stamp()
+
 	remote := pb.Stamp()
 	_, err := pa.Merge(remote)
 	if err != nil {
@@ -48,6 +51,38 @@ func TestPartitionedClock_Merge_TracksRemoteGroups(t *testing.T) {
 	}
 	if snap.Groups["dc-b"].Physical < 700 {
 		t.Fatalf("expected dc-b entry >= 700, got %v", snap.Groups["dc-b"])
+	}
+}
+
+// TestPartitionedClock_Merge_DoesNotInflateOwn checks that Merge does not
+// advance the local ownGroup entry. Without this guarantee, locally
+// stamped events would advertise causal dependencies on a value no peer
+// has ever observed, making the events un-deliverable across the
+// replication boundary (this caused a real bug in causal replication).
+func TestPartitionedClock_Merge_DoesNotInflateOwn(t *testing.T) {
+	fa := &fakeClock{}
+	fa.Set(500)
+	pa := NewPartitionedClock("dc-a", New(WithPhysicalClock(fa.Now)))
+
+	// First stamp records own=500.
+	first := pa.Stamp()
+	if first.Groups["dc-a"].Physical != 500 {
+		t.Fatalf("first stamp: %v", first)
+	}
+
+	// A remote merge from dc-b advances the local HLC under the hood,
+	// but must NOT touch dc-a's own-frontier entry.
+	fb := &fakeClock{}
+	fb.Set(700)
+	pb := NewPartitionedClock("dc-b", New(WithPhysicalClock(fb.Now)))
+	remote := pb.Stamp()
+	if _, err := pa.Merge(remote); err != nil {
+		t.Fatalf("merge: %v", err)
+	}
+
+	snap := pa.Peek()
+	if got := snap.Groups["dc-a"].Physical; got != 500 {
+		t.Fatalf("merge inflated dc-a entry to %d (expected 500)", got)
 	}
 }
 

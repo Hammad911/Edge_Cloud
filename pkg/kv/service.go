@@ -57,6 +57,13 @@ type Replicator interface {
 	Leader() string
 }
 
+// CausalPublisher is the optional cross-cluster replication hook. When set,
+// the Service notifies it after every successful local mutation so the
+// causal layer can ship the event to peer clusters.
+type CausalPublisher interface {
+	Publish(key string, value []byte, deleted bool, ts hlc.Timestamp)
+}
+
 // Config controls Service behavior.
 type Config struct {
 	// MaxValueBytes caps individual value size. 0 disables the check.
@@ -74,7 +81,8 @@ type service struct {
 	cfg        Config
 	clock      *hlc.Clock
 	store      storage.Store
-	replicator Replicator // may be nil
+	replicator Replicator      // may be nil
+	publisher  CausalPublisher // may be nil
 }
 
 // Option configures the Service at construction time.
@@ -84,6 +92,13 @@ type Option func(*service)
 // through it; direct store writes are only used when the replicator is nil.
 func WithReplicator(r Replicator) Option {
 	return func(s *service) { s.replicator = r }
+}
+
+// WithCausalPublisher attaches a cross-cluster CausalPublisher. The Service
+// notifies it after every successful Put/Delete so the causal layer can
+// ship the mutation to peer clusters.
+func WithCausalPublisher(p CausalPublisher) Option {
+	return func(s *service) { s.publisher = p }
 }
 
 // New constructs a Service. The clock and store must be non-nil.
@@ -161,11 +176,13 @@ func (s *service) Put(ctx context.Context, key string, value []byte, after hlc.T
 		if err := s.replicator.Apply(ctx, OpPut, key, value, ts); err != nil {
 			return hlc.Timestamp{}, fmt.Errorf("kv.Put: %w", err)
 		}
+		s.publish(key, value, false, ts)
 		return ts, nil
 	}
 	if err := s.store.Put(key, value, ts); err != nil {
 		return hlc.Timestamp{}, fmt.Errorf("kv.Put: %w", err)
 	}
+	s.publish(key, value, false, ts)
 	return ts, nil
 }
 
@@ -188,12 +205,21 @@ func (s *service) Delete(ctx context.Context, key string, after hlc.Timestamp) (
 		if err := s.replicator.Apply(ctx, OpDelete, key, nil, ts); err != nil {
 			return hlc.Timestamp{}, fmt.Errorf("kv.Delete: %w", err)
 		}
+		s.publish(key, nil, true, ts)
 		return ts, nil
 	}
 	if err := s.store.Delete(key, ts); err != nil {
 		return hlc.Timestamp{}, fmt.Errorf("kv.Delete: %w", err)
 	}
+	s.publish(key, nil, true, ts)
 	return ts, nil
+}
+
+func (s *service) publish(key string, value []byte, deleted bool, ts hlc.Timestamp) {
+	if s.publisher == nil {
+		return
+	}
+	s.publisher.Publish(key, value, deleted, ts)
 }
 
 func maxTS(a, b hlc.Timestamp) hlc.Timestamp {

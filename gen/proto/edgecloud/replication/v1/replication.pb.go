@@ -21,30 +21,29 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type PushUpdateRequest struct {
+// HLCTimestamp is the wire form of pkg/hlc.Timestamp.
+type HLCTimestamp struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	SourceSite    string                 `protobuf:"bytes,1,opt,name=source_site,json=sourceSite,proto3" json:"source_site,omitempty"`
-	Key           string                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
-	Value         []byte                 `protobuf:"bytes,3,opt,name=value,proto3" json:"value,omitempty"`
-	Metadata      []byte                 `protobuf:"bytes,4,opt,name=metadata,proto3" json:"metadata,omitempty"` // HLC / partitioned clock / deps (future)
+	Physical      int64                  `protobuf:"varint,1,opt,name=physical,proto3" json:"physical,omitempty"`
+	Logical       uint32                 `protobuf:"varint,2,opt,name=logical,proto3" json:"logical,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *PushUpdateRequest) Reset() {
-	*x = PushUpdateRequest{}
+func (x *HLCTimestamp) Reset() {
+	*x = HLCTimestamp{}
 	mi := &file_edgecloud_replication_v1_replication_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *PushUpdateRequest) String() string {
+func (x *HLCTimestamp) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*PushUpdateRequest) ProtoMessage() {}
+func (*HLCTimestamp) ProtoMessage() {}
 
-func (x *PushUpdateRequest) ProtoReflect() protoreflect.Message {
+func (x *HLCTimestamp) ProtoReflect() protoreflect.Message {
 	mi := &file_edgecloud_replication_v1_replication_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -56,61 +55,272 @@ func (x *PushUpdateRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use PushUpdateRequest.ProtoReflect.Descriptor instead.
-func (*PushUpdateRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use HLCTimestamp.ProtoReflect.Descriptor instead.
+func (*HLCTimestamp) Descriptor() ([]byte, []int) {
 	return file_edgecloud_replication_v1_replication_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *PushUpdateRequest) GetSourceSite() string {
+func (x *HLCTimestamp) GetPhysical() int64 {
 	if x != nil {
-		return x.SourceSite
+		return x.Physical
+	}
+	return 0
+}
+
+func (x *HLCTimestamp) GetLogical() uint32 {
+	if x != nil {
+		return x.Logical
+	}
+	return 0
+}
+
+// GroupClock is one entry in a partitioned-HLC vector: the latest HLC the
+// originator had observed for a particular datacenter group.
+type GroupClock struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Group         string                 `protobuf:"bytes,1,opt,name=group,proto3" json:"group,omitempty"`
+	Ts            *HLCTimestamp          `protobuf:"bytes,2,opt,name=ts,proto3" json:"ts,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GroupClock) Reset() {
+	*x = GroupClock{}
+	mi := &file_edgecloud_replication_v1_replication_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GroupClock) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GroupClock) ProtoMessage() {}
+
+func (x *GroupClock) ProtoReflect() protoreflect.Message {
+	mi := &file_edgecloud_replication_v1_replication_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GroupClock.ProtoReflect.Descriptor instead.
+func (*GroupClock) Descriptor() ([]byte, []int) {
+	return file_edgecloud_replication_v1_replication_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *GroupClock) GetGroup() string {
+	if x != nil {
+		return x.Group
 	}
 	return ""
 }
 
-func (x *PushUpdateRequest) GetKey() string {
+func (x *GroupClock) GetTs() *HLCTimestamp {
+	if x != nil {
+		return x.Ts
+	}
+	return nil
+}
+
+// PartitionedTimestamp is the wire form of pkg/hlc.PartitionedTimestamp.
+// Wire size scales with the number of GROUPS, not the number of sites,
+// which is the proposal's core scalability lever.
+type PartitionedTimestamp struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Origin        string                 `protobuf:"bytes,1,opt,name=origin,proto3" json:"origin,omitempty"`
+	Groups        []*GroupClock          `protobuf:"bytes,2,rep,name=groups,proto3" json:"groups,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PartitionedTimestamp) Reset() {
+	*x = PartitionedTimestamp{}
+	mi := &file_edgecloud_replication_v1_replication_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PartitionedTimestamp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PartitionedTimestamp) ProtoMessage() {}
+
+func (x *PartitionedTimestamp) ProtoReflect() protoreflect.Message {
+	mi := &file_edgecloud_replication_v1_replication_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PartitionedTimestamp.ProtoReflect.Descriptor instead.
+func (*PartitionedTimestamp) Descriptor() ([]byte, []int) {
+	return file_edgecloud_replication_v1_replication_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *PartitionedTimestamp) GetOrigin() string {
+	if x != nil {
+		return x.Origin
+	}
+	return ""
+}
+
+func (x *PartitionedTimestamp) GetGroups() []*GroupClock {
+	if x != nil {
+		return x.Groups
+	}
+	return nil
+}
+
+// Event is a single replicated mutation.
+type Event struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// event_id is a sender-assigned monotonic identifier scoped to (origin,
+	// sender_id). Used for deduplication and acknowledgement.
+	EventId uint64 `protobuf:"varint,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	// sender_id identifies the immediate sender. A cloud hub re-shipping
+	// events from edge-A to edge-B sets sender_id="cloud-hub".
+	SenderId string `protobuf:"bytes,2,opt,name=sender_id,json=senderId,proto3" json:"sender_id,omitempty"`
+	// origin is the GroupID that originally produced this mutation.
+	Origin  string `protobuf:"bytes,3,opt,name=origin,proto3" json:"origin,omitempty"`
+	Key     string `protobuf:"bytes,4,opt,name=key,proto3" json:"key,omitempty"`
+	Value   []byte `protobuf:"bytes,5,opt,name=value,proto3" json:"value,omitempty"` // empty when deleted = true
+	Deleted bool   `protobuf:"varint,6,opt,name=deleted,proto3" json:"deleted,omitempty"`
+	// commit_ts is the HLC the originator stamped on this event when it
+	// committed locally.
+	CommitTs *HLCTimestamp `protobuf:"bytes,7,opt,name=commit_ts,json=commitTs,proto3" json:"commit_ts,omitempty"`
+	// deps is the partitioned-HLC frontier the originator had observed when
+	// it produced the event. Receivers must have applied everything causally
+	// <= deps before delivering this event.
+	Deps          *PartitionedTimestamp `protobuf:"bytes,8,opt,name=deps,proto3" json:"deps,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Event) Reset() {
+	*x = Event{}
+	mi := &file_edgecloud_replication_v1_replication_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Event) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Event) ProtoMessage() {}
+
+func (x *Event) ProtoReflect() protoreflect.Message {
+	mi := &file_edgecloud_replication_v1_replication_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Event.ProtoReflect.Descriptor instead.
+func (*Event) Descriptor() ([]byte, []int) {
+	return file_edgecloud_replication_v1_replication_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *Event) GetEventId() uint64 {
+	if x != nil {
+		return x.EventId
+	}
+	return 0
+}
+
+func (x *Event) GetSenderId() string {
+	if x != nil {
+		return x.SenderId
+	}
+	return ""
+}
+
+func (x *Event) GetOrigin() string {
+	if x != nil {
+		return x.Origin
+	}
+	return ""
+}
+
+func (x *Event) GetKey() string {
 	if x != nil {
 		return x.Key
 	}
 	return ""
 }
 
-func (x *PushUpdateRequest) GetValue() []byte {
+func (x *Event) GetValue() []byte {
 	if x != nil {
 		return x.Value
 	}
 	return nil
 }
 
-func (x *PushUpdateRequest) GetMetadata() []byte {
+func (x *Event) GetDeleted() bool {
 	if x != nil {
-		return x.Metadata
+		return x.Deleted
+	}
+	return false
+}
+
+func (x *Event) GetCommitTs() *HLCTimestamp {
+	if x != nil {
+		return x.CommitTs
 	}
 	return nil
 }
 
-type PushUpdateResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Accepted      bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+func (x *Event) GetDeps() *PartitionedTimestamp {
+	if x != nil {
+		return x.Deps
+	}
+	return nil
+}
+
+// PushMessage is one frame on the Push stream.
+type PushMessage struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Payload:
+	//
+	//	*PushMessage_Event
+	//	*PushMessage_Hello
+	Payload       isPushMessage_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *PushUpdateResponse) Reset() {
-	*x = PushUpdateResponse{}
-	mi := &file_edgecloud_replication_v1_replication_proto_msgTypes[1]
+func (x *PushMessage) Reset() {
+	*x = PushMessage{}
+	mi := &file_edgecloud_replication_v1_replication_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *PushUpdateResponse) String() string {
+func (x *PushMessage) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*PushUpdateResponse) ProtoMessage() {}
+func (*PushMessage) ProtoMessage() {}
 
-func (x *PushUpdateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_edgecloud_replication_v1_replication_proto_msgTypes[1]
+func (x *PushMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_edgecloud_replication_v1_replication_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -121,14 +331,260 @@ func (x *PushUpdateResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use PushUpdateResponse.ProtoReflect.Descriptor instead.
-func (*PushUpdateResponse) Descriptor() ([]byte, []int) {
-	return file_edgecloud_replication_v1_replication_proto_rawDescGZIP(), []int{1}
+// Deprecated: Use PushMessage.ProtoReflect.Descriptor instead.
+func (*PushMessage) Descriptor() ([]byte, []int) {
+	return file_edgecloud_replication_v1_replication_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *PushUpdateResponse) GetAccepted() bool {
+func (x *PushMessage) GetPayload() isPushMessage_Payload {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *PushMessage) GetEvent() *Event {
+	if x != nil {
+		if x, ok := x.Payload.(*PushMessage_Event); ok {
+			return x.Event
+		}
+	}
+	return nil
+}
+
+func (x *PushMessage) GetHello() *Hello {
+	if x != nil {
+		if x, ok := x.Payload.(*PushMessage_Hello); ok {
+			return x.Hello
+		}
+	}
+	return nil
+}
+
+type isPushMessage_Payload interface {
+	isPushMessage_Payload()
+}
+
+type PushMessage_Event struct {
+	Event *Event `protobuf:"bytes,1,opt,name=event,proto3,oneof"`
+}
+
+type PushMessage_Hello struct {
+	Hello *Hello `protobuf:"bytes,2,opt,name=hello,proto3,oneof"` // sent once at stream start, identifies the sender
+}
+
+func (*PushMessage_Event) isPushMessage_Payload() {}
+
+func (*PushMessage_Hello) isPushMessage_Payload() {}
+
+// Hello is the first frame on every Push stream. It identifies the sender
+// and lets the receiver associate subsequent events with it.
+type Hello struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SenderId      string                 `protobuf:"bytes,1,opt,name=sender_id,json=senderId,proto3" json:"sender_id,omitempty"`
+	Origin        string                 `protobuf:"bytes,2,opt,name=origin,proto3" json:"origin,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Hello) Reset() {
+	*x = Hello{}
+	mi := &file_edgecloud_replication_v1_replication_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Hello) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Hello) ProtoMessage() {}
+
+func (x *Hello) ProtoReflect() protoreflect.Message {
+	mi := &file_edgecloud_replication_v1_replication_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Hello.ProtoReflect.Descriptor instead.
+func (*Hello) Descriptor() ([]byte, []int) {
+	return file_edgecloud_replication_v1_replication_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *Hello) GetSenderId() string {
+	if x != nil {
+		return x.SenderId
+	}
+	return ""
+}
+
+func (x *Hello) GetOrigin() string {
+	if x != nil {
+		return x.Origin
+	}
+	return ""
+}
+
+// PushAck acknowledges (or rejects) a single event by id. Senders use Acks
+// to advance their outbox cursor. A negative ack carries an error message.
+type PushAck struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	EventId       uint64                 `protobuf:"varint,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	Accepted      bool                   `protobuf:"varint,2,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"` // populated when accepted=false
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PushAck) Reset() {
+	*x = PushAck{}
+	mi := &file_edgecloud_replication_v1_replication_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PushAck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PushAck) ProtoMessage() {}
+
+func (x *PushAck) ProtoReflect() protoreflect.Message {
+	mi := &file_edgecloud_replication_v1_replication_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PushAck.ProtoReflect.Descriptor instead.
+func (*PushAck) Descriptor() ([]byte, []int) {
+	return file_edgecloud_replication_v1_replication_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *PushAck) GetEventId() uint64 {
+	if x != nil {
+		return x.EventId
+	}
+	return 0
+}
+
+func (x *PushAck) GetAccepted() bool {
 	if x != nil {
 		return x.Accepted
+	}
+	return false
+}
+
+func (x *PushAck) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type HealthRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HealthRequest) Reset() {
+	*x = HealthRequest{}
+	mi := &file_edgecloud_replication_v1_replication_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HealthRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HealthRequest) ProtoMessage() {}
+
+func (x *HealthRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_edgecloud_replication_v1_replication_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HealthRequest.ProtoReflect.Descriptor instead.
+func (*HealthRequest) Descriptor() ([]byte, []int) {
+	return file_edgecloud_replication_v1_replication_proto_rawDescGZIP(), []int{7}
+}
+
+type HealthResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Serving       bool                   `protobuf:"varint,1,opt,name=serving,proto3" json:"serving,omitempty"`
+	NodeId        string                 `protobuf:"bytes,2,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	IsLeader      bool                   `protobuf:"varint,3,opt,name=is_leader,json=isLeader,proto3" json:"is_leader,omitempty"` // for edge nodes; cloud hub returns true
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HealthResponse) Reset() {
+	*x = HealthResponse{}
+	mi := &file_edgecloud_replication_v1_replication_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HealthResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HealthResponse) ProtoMessage() {}
+
+func (x *HealthResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_edgecloud_replication_v1_replication_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HealthResponse.ProtoReflect.Descriptor instead.
+func (*HealthResponse) Descriptor() ([]byte, []int) {
+	return file_edgecloud_replication_v1_replication_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *HealthResponse) GetServing() bool {
+	if x != nil {
+		return x.Serving
+	}
+	return false
+}
+
+func (x *HealthResponse) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *HealthResponse) GetIsLeader() bool {
+	if x != nil {
+		return x.IsLeader
 	}
 	return false
 }
@@ -137,18 +593,45 @@ var File_edgecloud_replication_v1_replication_proto protoreflect.FileDescriptor
 
 const file_edgecloud_replication_v1_replication_proto_rawDesc = "" +
 	"\n" +
-	"*edgecloud/replication/v1/replication.proto\x12\x18edgecloud.replication.v1\"x\n" +
-	"\x11PushUpdateRequest\x12\x1f\n" +
-	"\vsource_site\x18\x01 \x01(\tR\n" +
-	"sourceSite\x12\x10\n" +
-	"\x03key\x18\x02 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x03 \x01(\fR\x05value\x12\x1a\n" +
-	"\bmetadata\x18\x04 \x01(\fR\bmetadata\"0\n" +
-	"\x12PushUpdateResponse\x12\x1a\n" +
-	"\baccepted\x18\x01 \x01(\bR\baccepted2v\n" +
-	"\vReplication\x12g\n" +
+	"*edgecloud/replication/v1/replication.proto\x12\x18edgecloud.replication.v1\"D\n" +
+	"\fHLCTimestamp\x12\x1a\n" +
+	"\bphysical\x18\x01 \x01(\x03R\bphysical\x12\x18\n" +
+	"\alogical\x18\x02 \x01(\rR\alogical\"Z\n" +
 	"\n" +
-	"PushUpdate\x12+.edgecloud.replication.v1.PushUpdateRequest\x1a,.edgecloud.replication.v1.PushUpdateResponseBIZGedge-cloud-replication/gen/proto/edgecloud/replication/v1;replicationv1b\x06proto3"
+	"GroupClock\x12\x14\n" +
+	"\x05group\x18\x01 \x01(\tR\x05group\x126\n" +
+	"\x02ts\x18\x02 \x01(\v2&.edgecloud.replication.v1.HLCTimestampR\x02ts\"l\n" +
+	"\x14PartitionedTimestamp\x12\x16\n" +
+	"\x06origin\x18\x01 \x01(\tR\x06origin\x12<\n" +
+	"\x06groups\x18\x02 \x03(\v2$.edgecloud.replication.v1.GroupClockR\x06groups\"\xa2\x02\n" +
+	"\x05Event\x12\x19\n" +
+	"\bevent_id\x18\x01 \x01(\x04R\aeventId\x12\x1b\n" +
+	"\tsender_id\x18\x02 \x01(\tR\bsenderId\x12\x16\n" +
+	"\x06origin\x18\x03 \x01(\tR\x06origin\x12\x10\n" +
+	"\x03key\x18\x04 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x05 \x01(\fR\x05value\x12\x18\n" +
+	"\adeleted\x18\x06 \x01(\bR\adeleted\x12C\n" +
+	"\tcommit_ts\x18\a \x01(\v2&.edgecloud.replication.v1.HLCTimestampR\bcommitTs\x12B\n" +
+	"\x04deps\x18\b \x01(\v2..edgecloud.replication.v1.PartitionedTimestampR\x04deps\"\x8a\x01\n" +
+	"\vPushMessage\x127\n" +
+	"\x05event\x18\x01 \x01(\v2\x1f.edgecloud.replication.v1.EventH\x00R\x05event\x127\n" +
+	"\x05hello\x18\x02 \x01(\v2\x1f.edgecloud.replication.v1.HelloH\x00R\x05helloB\t\n" +
+	"\apayload\"<\n" +
+	"\x05Hello\x12\x1b\n" +
+	"\tsender_id\x18\x01 \x01(\tR\bsenderId\x12\x16\n" +
+	"\x06origin\x18\x02 \x01(\tR\x06origin\"V\n" +
+	"\aPushAck\x12\x19\n" +
+	"\bevent_id\x18\x01 \x01(\x04R\aeventId\x12\x1a\n" +
+	"\baccepted\x18\x02 \x01(\bR\baccepted\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"\x0f\n" +
+	"\rHealthRequest\"`\n" +
+	"\x0eHealthResponse\x12\x18\n" +
+	"\aserving\x18\x01 \x01(\bR\aserving\x12\x17\n" +
+	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12\x1b\n" +
+	"\tis_leader\x18\x03 \x01(\bR\bisLeader2\xc0\x01\n" +
+	"\vReplication\x12T\n" +
+	"\x04Push\x12%.edgecloud.replication.v1.PushMessage\x1a!.edgecloud.replication.v1.PushAck(\x010\x01\x12[\n" +
+	"\x06Health\x12'.edgecloud.replication.v1.HealthRequest\x1a(.edgecloud.replication.v1.HealthResponseBIZGedge-cloud-replication/gen/proto/edgecloud/replication/v1;replicationv1b\x06proto3"
 
 var (
 	file_edgecloud_replication_v1_replication_proto_rawDescOnce sync.Once
@@ -162,19 +645,34 @@ func file_edgecloud_replication_v1_replication_proto_rawDescGZIP() []byte {
 	return file_edgecloud_replication_v1_replication_proto_rawDescData
 }
 
-var file_edgecloud_replication_v1_replication_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_edgecloud_replication_v1_replication_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_edgecloud_replication_v1_replication_proto_goTypes = []any{
-	(*PushUpdateRequest)(nil),  // 0: edgecloud.replication.v1.PushUpdateRequest
-	(*PushUpdateResponse)(nil), // 1: edgecloud.replication.v1.PushUpdateResponse
+	(*HLCTimestamp)(nil),         // 0: edgecloud.replication.v1.HLCTimestamp
+	(*GroupClock)(nil),           // 1: edgecloud.replication.v1.GroupClock
+	(*PartitionedTimestamp)(nil), // 2: edgecloud.replication.v1.PartitionedTimestamp
+	(*Event)(nil),                // 3: edgecloud.replication.v1.Event
+	(*PushMessage)(nil),          // 4: edgecloud.replication.v1.PushMessage
+	(*Hello)(nil),                // 5: edgecloud.replication.v1.Hello
+	(*PushAck)(nil),              // 6: edgecloud.replication.v1.PushAck
+	(*HealthRequest)(nil),        // 7: edgecloud.replication.v1.HealthRequest
+	(*HealthResponse)(nil),       // 8: edgecloud.replication.v1.HealthResponse
 }
 var file_edgecloud_replication_v1_replication_proto_depIdxs = []int32{
-	0, // 0: edgecloud.replication.v1.Replication.PushUpdate:input_type -> edgecloud.replication.v1.PushUpdateRequest
-	1, // 1: edgecloud.replication.v1.Replication.PushUpdate:output_type -> edgecloud.replication.v1.PushUpdateResponse
-	1, // [1:2] is the sub-list for method output_type
-	0, // [0:1] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	0, // 0: edgecloud.replication.v1.GroupClock.ts:type_name -> edgecloud.replication.v1.HLCTimestamp
+	1, // 1: edgecloud.replication.v1.PartitionedTimestamp.groups:type_name -> edgecloud.replication.v1.GroupClock
+	0, // 2: edgecloud.replication.v1.Event.commit_ts:type_name -> edgecloud.replication.v1.HLCTimestamp
+	2, // 3: edgecloud.replication.v1.Event.deps:type_name -> edgecloud.replication.v1.PartitionedTimestamp
+	3, // 4: edgecloud.replication.v1.PushMessage.event:type_name -> edgecloud.replication.v1.Event
+	5, // 5: edgecloud.replication.v1.PushMessage.hello:type_name -> edgecloud.replication.v1.Hello
+	4, // 6: edgecloud.replication.v1.Replication.Push:input_type -> edgecloud.replication.v1.PushMessage
+	7, // 7: edgecloud.replication.v1.Replication.Health:input_type -> edgecloud.replication.v1.HealthRequest
+	6, // 8: edgecloud.replication.v1.Replication.Push:output_type -> edgecloud.replication.v1.PushAck
+	8, // 9: edgecloud.replication.v1.Replication.Health:output_type -> edgecloud.replication.v1.HealthResponse
+	8, // [8:10] is the sub-list for method output_type
+	6, // [6:8] is the sub-list for method input_type
+	6, // [6:6] is the sub-list for extension type_name
+	6, // [6:6] is the sub-list for extension extendee
+	0, // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_edgecloud_replication_v1_replication_proto_init() }
@@ -182,13 +680,17 @@ func file_edgecloud_replication_v1_replication_proto_init() {
 	if File_edgecloud_replication_v1_replication_proto != nil {
 		return
 	}
+	file_edgecloud_replication_v1_replication_proto_msgTypes[4].OneofWrappers = []any{
+		(*PushMessage_Event)(nil),
+		(*PushMessage_Hello)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_edgecloud_replication_v1_replication_proto_rawDesc), len(file_edgecloud_replication_v1_replication_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

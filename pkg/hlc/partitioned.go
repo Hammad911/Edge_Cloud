@@ -190,14 +190,34 @@ func (p *PartitionedClock) Stamp() PartitionedTimestamp {
 	return p.snapshotLocked()
 }
 
+// StampAt records that a local event has been stamped at the given ts (as
+// chosen by an external authority such as the KV service's HLC) and
+// advances the ownGroup entry. Use this when the caller has already
+// allocated the timestamp via the underlying Clock (so Stamp would
+// duplicate work and risk drift).
+func (p *PartitionedClock) StampAt(ts Timestamp) PartitionedTimestamp {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if ts.After(p.groups[p.ownGroup]) {
+		p.groups[p.ownGroup] = ts
+	}
+	return p.snapshotLocked()
+}
+
 // Merge incorporates a received PartitionedTimestamp, advancing each known
 // group's entry to the componentwise max, and returns the resulting
-// timestamp for the receive event (i.e. the timestamp to stamp on any
-// subsequent local event caused by this receive).
+// snapshot.
 //
 // Returns ErrClockDrift if the remote ownGroup entry exceeds the local HLC's
 // drift budget - this is the one entry we can sanity-check against physical
 // time, since it was stamped by a well-defined source.
+//
+// Important: Merge does NOT bump the local ownGroup's frontier entry. Doing
+// so would cause subsequently-stamped events to advertise causal
+// dependencies on an "imaginary" local value that no peer has ever
+// observed (since no event was ever stamped at that exact ts), making the
+// event un-deliverable on remote replicas. The ownGroup entry advances
+// only when Stamp is called for a real local write.
 func (p *PartitionedClock) Merge(remote PartitionedTimestamp) (PartitionedTimestamp, error) {
 	if remote.Origin != "" {
 		if rt, ok := remote.Groups[remote.Origin]; ok {
@@ -207,18 +227,19 @@ func (p *PartitionedClock) Merge(remote PartitionedTimestamp) (PartitionedTimest
 		}
 	}
 
-	newLocal := p.local.Now()
-
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	for g, rt := range remote.Groups {
+		if g == p.ownGroup {
+			// Skip: see doc above.
+			continue
+		}
 		cur := p.groups[g]
 		if rt.After(cur) {
 			p.groups[g] = rt
 		}
 	}
-	p.groups[p.ownGroup] = newLocal
 
 	return p.snapshotLocked(), nil
 }

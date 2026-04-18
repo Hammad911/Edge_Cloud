@@ -4,19 +4,102 @@ package edgecloud.replication.v1;
 
 option go_package = "edge-cloud-replication/gen/proto/edgecloud/replication/v1;replicationv1";
 
-// Inter-cluster replication (placeholder).
+// Replication is the cross-cluster causal replication API. It is exposed by
+// every node that participates in the edge<->cloud topology (cloud hub and
+// edge cluster leaders).
+//
+// The unit of replication is an Event: a key/value mutation tagged with the
+// originating group's identifier, the HLC at which it was committed locally,
+// and the partitioned-HLC frontier the originator had observed at the time
+// of commit. Receivers buffer events whose causal dependencies have not yet
+// been satisfied and apply them in causal order.
 service Replication {
-  rpc PushUpdate(PushUpdateRequest) returns (PushUpdateResponse);
+  // Push streams events from a sender (e.g. an edge cluster leader) to a
+  // receiver (e.g. the cloud hub). The receiver acknowledges every event
+  // (positively or negatively) so the sender can advance its outbox and
+  // apply backpressure.
+  rpc Push(stream PushMessage) returns (stream PushAck);
+
+  // Health is a unary probe used by senders to discover whether the peer is
+  // reachable and accepting writes (e.g. is the raft leader, in the edge
+  // case).
+  rpc Health(HealthRequest) returns (HealthResponse);
 }
 
-message PushUpdateRequest {
-  string source_site = 1;
-  string key = 2;
-  bytes value = 3;
-  bytes metadata = 4; // HLC / partitioned clock / deps (future)
+// HLCTimestamp is the wire form of pkg/hlc.Timestamp.
+message HLCTimestamp {
+  int64 physical = 1;
+  uint32 logical = 2;
 }
 
-message PushUpdateResponse {
-  bool accepted = 1;
+// GroupClock is one entry in a partitioned-HLC vector: the latest HLC the
+// originator had observed for a particular datacenter group.
+message GroupClock {
+  string group = 1;
+  HLCTimestamp ts = 2;
 }
 
+// PartitionedTimestamp is the wire form of pkg/hlc.PartitionedTimestamp.
+// Wire size scales with the number of GROUPS, not the number of sites,
+// which is the proposal's core scalability lever.
+message PartitionedTimestamp {
+  string origin = 1;
+  repeated GroupClock groups = 2;
+}
+
+// Event is a single replicated mutation.
+message Event {
+  // event_id is a sender-assigned monotonic identifier scoped to (origin,
+  // sender_id). Used for deduplication and acknowledgement.
+  uint64 event_id = 1;
+
+  // sender_id identifies the immediate sender. A cloud hub re-shipping
+  // events from edge-A to edge-B sets sender_id="cloud-hub".
+  string sender_id = 2;
+
+  // origin is the GroupID that originally produced this mutation.
+  string origin = 3;
+
+  string key = 4;
+  bytes  value = 5; // empty when deleted = true
+  bool   deleted = 6;
+
+  // commit_ts is the HLC the originator stamped on this event when it
+  // committed locally.
+  HLCTimestamp commit_ts = 7;
+
+  // deps is the partitioned-HLC frontier the originator had observed when
+  // it produced the event. Receivers must have applied everything causally
+  // <= deps before delivering this event.
+  PartitionedTimestamp deps = 8;
+}
+
+// PushMessage is one frame on the Push stream.
+message PushMessage {
+  oneof payload {
+    Event event = 1;
+    Hello hello = 2; // sent once at stream start, identifies the sender
+  }
+}
+
+// Hello is the first frame on every Push stream. It identifies the sender
+// and lets the receiver associate subsequent events with it.
+message Hello {
+  string sender_id = 1;
+  string origin    = 2;
+}
+
+// PushAck acknowledges (or rejects) a single event by id. Senders use Acks
+// to advance their outbox cursor. A negative ack carries an error message.
+message PushAck {
+  uint64 event_id = 1;
+  bool   accepted = 2;
+  string error    = 3; // populated when accepted=false
+}
+
+message HealthRequest {}
+message HealthResponse {
+  bool   serving   = 1;
+  string node_id   = 2;
+  bool   is_leader = 3; // for edge nodes; cloud hub returns true
+}

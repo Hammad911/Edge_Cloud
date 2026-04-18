@@ -6,7 +6,7 @@ LDFLAGS := -X edge-cloud-replication/internal/app.Version=$(VERSION) -s -w
 
 BIN_DIR := bin
 
-BINARIES := edge-node cloud-node simulator checker benchmark kvsmoke
+BINARIES := edge-node cloud-node kvsmoke
 
 .PHONY: all
 all: build
@@ -86,6 +86,18 @@ cluster-status:
 	@for p in 8081 8082 8083; do \
 	  echo "=== 127.0.0.1:$$p ==="; \
 	  curl -s http://127.0.0.1:$$p/cluster/status | python3 -m json.tool || true; \
+	done
+
+# ---- causal-replication topology (1 cloud + 2 edges) ----
+.PHONY: causal-up causal-down causal-status
+causal-up: build
+	./scripts/causal_up.sh
+causal-down:
+	./scripts/causal_down.sh
+causal-status:
+	@for p in 9081 8011 8021; do \
+	  echo "=== 127.0.0.1:$$p ==="; \
+	  curl -s http://127.0.0.1:$$p/healthz || true; echo; \
 	done
 
 .PHONY: clean-data

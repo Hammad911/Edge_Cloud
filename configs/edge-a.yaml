@@ -1,0 +1,28 @@
+node:
+  id: edge-a-0
+  role: edge
+  region: us-west-1
+
+admin:
+  listen_addr: 127.0.0.1:8011
+  enable_pprof: false
+
+grpc:
+  listen_addr: 127.0.0.1:7011
+  reflection: true
+
+raft:
+  enabled: false
+
+replication:
+  enabled: true
+  group_id: edge-a
+  outbox_capacity: 10000
+  buffer_dir: ./data/edge-a-0/buffer
+  peers:
+    - name: cloud
+      addr: 127.0.0.1:9001
+
+logging:
+  level: info
+  format: text

@@ -19,16 +19,33 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Replication_PushUpdate_FullMethodName = "/edgecloud.replication.v1.Replication/PushUpdate"
+	Replication_Push_FullMethodName   = "/edgecloud.replication.v1.Replication/Push"
+	Replication_Health_FullMethodName = "/edgecloud.replication.v1.Replication/Health"
 )
 
 // ReplicationClient is the client API for Replication service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// Inter-cluster replication (placeholder).
+// Replication is the cross-cluster causal replication API. It is exposed by
+// every node that participates in the edge<->cloud topology (cloud hub and
+// edge cluster leaders).
+//
+// The unit of replication is an Event: a key/value mutation tagged with the
+// originating group's identifier, the HLC at which it was committed locally,
+// and the partitioned-HLC frontier the originator had observed at the time
+// of commit. Receivers buffer events whose causal dependencies have not yet
+// been satisfied and apply them in causal order.
 type ReplicationClient interface {
-	PushUpdate(ctx context.Context, in *PushUpdateRequest, opts ...grpc.CallOption) (*PushUpdateResponse, error)
+	// Push streams events from a sender (e.g. an edge cluster leader) to a
+	// receiver (e.g. the cloud hub). The receiver acknowledges every event
+	// (positively or negatively) so the sender can advance its outbox and
+	// apply backpressure.
+	Push(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[PushMessage, PushAck], error)
+	// Health is a unary probe used by senders to discover whether the peer is
+	// reachable and accepting writes (e.g. is the raft leader, in the edge
+	// case).
+	Health(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error)
 }
 
 type replicationClient struct {
@@ -39,10 +56,23 @@ func NewReplicationClient(cc grpc.ClientConnInterface) ReplicationClient {
 	return &replicationClient{cc}
 }
 
-func (c *replicationClient) PushUpdate(ctx context.Context, in *PushUpdateRequest, opts ...grpc.CallOption) (*PushUpdateResponse, error) {
+func (c *replicationClient) Push(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[PushMessage, PushAck], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PushUpdateResponse)
-	err := c.cc.Invoke(ctx, Replication_PushUpdate_FullMethodName, in, out, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Replication_ServiceDesc.Streams[0], Replication_Push_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[PushMessage, PushAck]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Replication_PushClient = grpc.BidiStreamingClient[PushMessage, PushAck]
+
+func (c *replicationClient) Health(ctx context.Context, in *HealthRequest, opts ...grpc.CallOption) (*HealthResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HealthResponse)
+	err := c.cc.Invoke(ctx, Replication_Health_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -53,9 +83,25 @@ func (c *replicationClient) PushUpdate(ctx context.Context, in *PushUpdateReques
 // All implementations must embed UnimplementedReplicationServer
 // for forward compatibility.
 //
-// Inter-cluster replication (placeholder).
+// Replication is the cross-cluster causal replication API. It is exposed by
+// every node that participates in the edge<->cloud topology (cloud hub and
+// edge cluster leaders).
+//
+// The unit of replication is an Event: a key/value mutation tagged with the
+// originating group's identifier, the HLC at which it was committed locally,
+// and the partitioned-HLC frontier the originator had observed at the time
+// of commit. Receivers buffer events whose causal dependencies have not yet
+// been satisfied and apply them in causal order.
 type ReplicationServer interface {
-	PushUpdate(context.Context, *PushUpdateRequest) (*PushUpdateResponse, error)
+	// Push streams events from a sender (e.g. an edge cluster leader) to a
+	// receiver (e.g. the cloud hub). The receiver acknowledges every event
+	// (positively or negatively) so the sender can advance its outbox and
+	// apply backpressure.
+	Push(grpc.BidiStreamingServer[PushMessage, PushAck]) error
+	// Health is a unary probe used by senders to discover whether the peer is
+	// reachable and accepting writes (e.g. is the raft leader, in the edge
+	// case).
+	Health(context.Context, *HealthRequest) (*HealthResponse, error)
 	mustEmbedUnimplementedReplicationServer()
 }
 
@@ -66,8 +112,11 @@ type ReplicationServer interface {
 // pointer dereference when methods are called.
 type UnimplementedReplicationServer struct{}
 
-func (UnimplementedReplicationServer) PushUpdate(context.Context, *PushUpdateRequest) (*PushUpdateResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method PushUpdate not implemented")
+func (UnimplementedReplicationServer) Push(grpc.BidiStreamingServer[PushMessage, PushAck]) error {
+	return status.Error(codes.Unimplemented, "method Push not implemented")
+}
+func (UnimplementedReplicationServer) Health(context.Context, *HealthRequest) (*HealthResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Health not implemented")
 }
 func (UnimplementedReplicationServer) mustEmbedUnimplementedReplicationServer() {}
 func (UnimplementedReplicationServer) testEmbeddedByValue()                     {}
@@ -90,20 +139,27 @@ func RegisterReplicationServer(s grpc.ServiceRegistrar, srv ReplicationServer) {
 	s.RegisterService(&Replication_ServiceDesc, srv)
 }
 
-func _Replication_PushUpdate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PushUpdateRequest)
+func _Replication_Push_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(ReplicationServer).Push(&grpc.GenericServerStream[PushMessage, PushAck]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Replication_PushServer = grpc.BidiStreamingServer[PushMessage, PushAck]
+
+func _Replication_Health_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HealthRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(ReplicationServer).PushUpdate(ctx, in)
+		return srv.(ReplicationServer).Health(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: Replication_PushUpdate_FullMethodName,
+		FullMethod: Replication_Health_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ReplicationServer).PushUpdate(ctx, req.(*PushUpdateRequest))
+		return srv.(ReplicationServer).Health(ctx, req.(*HealthRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -116,10 +172,17 @@ var Replication_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*ReplicationServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "PushUpdate",
-			Handler:    _Replication_PushUpdate_Handler,
+			MethodName: "Health",
+			Handler:    _Replication_Health_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Push",
+			Handler:       _Replication_Push_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+	},
 	Metadata: "edgecloud/replication/v1/replication.proto",
 }

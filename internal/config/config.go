@@ -80,10 +80,18 @@ type RaftPeer struct {
 
 // ReplicationConfig configures the inter-cluster causal replication layer.
 type ReplicationConfig struct {
-	Enabled   bool     `mapstructure:"enabled"`
-	CloudAddr string   `mapstructure:"cloud_addr"`
-	Peers     []string `mapstructure:"peers"`
-	BufferDir string   `mapstructure:"buffer_dir"`
+	Enabled        bool              `mapstructure:"enabled"`
+	GroupID        string            `mapstructure:"group_id"`
+	OutboxCapacity int               `mapstructure:"outbox_capacity"`
+	Peers          []ReplicationPeer `mapstructure:"peers"`
+	BufferDir      string            `mapstructure:"buffer_dir"`
+}
+
+// ReplicationPeer describes a remote replication target (the cloud hub for
+// edges; the edge cluster leaders for the cloud).
+type ReplicationPeer struct {
+	Name string `mapstructure:"name"`
+	Addr string `mapstructure:"addr"`
 }
 
 // LoggingConfig controls process logging output.
@@ -160,8 +168,9 @@ func applyDefaults(v *viper.Viper) {
 	v.SetDefault("raft.apply_timeout", "5s")
 
 	v.SetDefault("replication.enabled", false)
-	v.SetDefault("replication.cloud_addr", "127.0.0.1:9001")
-	v.SetDefault("replication.peers", []string{})
+	v.SetDefault("replication.group_id", "")
+	v.SetDefault("replication.outbox_capacity", 10000)
+	v.SetDefault("replication.peers", []map[string]string{})
 	v.SetDefault("replication.buffer_dir", "./data/buffer")
 
 	v.SetDefault("logging.level", "info")
@@ -188,6 +197,16 @@ func (c *Config) Validate() error {
 	case "debug", "info", "warn", "error":
 	default:
 		return fmt.Errorf("logging.level must be one of debug|info|warn|error, got %q", c.Logging.Level)
+	}
+	if c.Replication.Enabled {
+		if c.Replication.GroupID == "" {
+			return fmt.Errorf("replication.group_id must be set when replication.enabled=true")
+		}
+		for i, p := range c.Replication.Peers {
+			if p.Name == "" || p.Addr == "" {
+				return fmt.Errorf("replication.peers[%d]: both name and addr required", i)
+			}
+		}
 	}
 	if c.Raft.Enabled {
 		if c.Raft.Bind == "" {

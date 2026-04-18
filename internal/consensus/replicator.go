@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"edge-cloud-replication/pkg/causal"
 	"edge-cloud-replication/pkg/hlc"
 	"edge-cloud-replication/pkg/kv"
 	raftpkg "edge-cloud-replication/pkg/raft"
@@ -56,3 +57,27 @@ func (r *RaftReplicator) IsLeader() bool { return r.node.IsLeader() }
 
 // Leader implements kv.Replicator.
 func (r *RaftReplicator) Leader() string { return r.node.Leader() }
+
+// CommitRemote implements causal.RaftCommitter. It takes a remote causal
+// event and proposes it through Raft so every replica in the local cluster
+// applies the same write at the originator's timestamp. When the local
+// store already has a newer version of the key, the FSM's stale-write
+// rejection silently absorbs the no-op (we map ErrStaleWrite to nil at the
+// application layer to keep this idempotent).
+func (r *RaftReplicator) CommitRemote(ctx context.Context, e *causal.Event) error {
+	op := raftpkg.OpPut
+	if e.Deleted {
+		op = raftpkg.OpDelete
+	}
+	cmd := raftpkg.Command{
+		Op:        op,
+		Timestamp: e.CommitTS,
+		Key:       e.Key,
+		Value:     e.Value,
+	}
+	err := r.node.Apply(ctx, cmd, r.applyTimeout)
+	if errors.Is(err, raftpkg.ErrNotLeader) {
+		return causal.ErrNotLeader
+	}
+	return err
+}
