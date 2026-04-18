@@ -59,11 +59,23 @@ type GRPCConfig struct {
 
 // RaftConfig configures the within-cluster Raft layer (edge nodes only).
 type RaftConfig struct {
-	Enabled   bool     `mapstructure:"enabled"`
-	ClusterID string   `mapstructure:"cluster_id"`
-	Bind      string   `mapstructure:"bind"`
-	Peers     []string `mapstructure:"peers"`
-	DataDir   string   `mapstructure:"data_dir"`
+	Enabled           bool          `mapstructure:"enabled"`
+	ClusterID         string        `mapstructure:"cluster_id"`
+	Bind              string        `mapstructure:"bind"`
+	AdvertiseAddr     string        `mapstructure:"advertise_addr"`
+	Peers             []RaftPeer    `mapstructure:"peers"`
+	DataDir           string        `mapstructure:"data_dir"`
+	Bootstrap         bool          `mapstructure:"bootstrap"`
+	SnapshotInterval  time.Duration `mapstructure:"snapshot_interval"`
+	SnapshotThreshold uint64        `mapstructure:"snapshot_threshold"`
+	ApplyTimeout      time.Duration `mapstructure:"apply_timeout"`
+}
+
+// RaftPeer describes a single Raft cluster member. ID must match NodeID of
+// the remote replica; Addr must be reachable from this node.
+type RaftPeer struct {
+	ID   string `mapstructure:"id"`
+	Addr string `mapstructure:"addr"`
 }
 
 // ReplicationConfig configures the inter-cluster causal replication layer.
@@ -139,8 +151,13 @@ func applyDefaults(v *viper.Viper) {
 	v.SetDefault("raft.enabled", false)
 	v.SetDefault("raft.cluster_id", "edge-cluster-1")
 	v.SetDefault("raft.bind", "127.0.0.1:7101")
-	v.SetDefault("raft.peers", []string{})
+	v.SetDefault("raft.advertise_addr", "")
+	v.SetDefault("raft.peers", []map[string]string{})
 	v.SetDefault("raft.data_dir", "./data/raft")
+	v.SetDefault("raft.bootstrap", false)
+	v.SetDefault("raft.snapshot_interval", "120s")
+	v.SetDefault("raft.snapshot_threshold", 8192)
+	v.SetDefault("raft.apply_timeout", "5s")
 
 	v.SetDefault("replication.enabled", false)
 	v.SetDefault("replication.cloud_addr", "127.0.0.1:9001")
@@ -171,6 +188,19 @@ func (c *Config) Validate() error {
 	case "debug", "info", "warn", "error":
 	default:
 		return fmt.Errorf("logging.level must be one of debug|info|warn|error, got %q", c.Logging.Level)
+	}
+	if c.Raft.Enabled {
+		if c.Raft.Bind == "" {
+			return fmt.Errorf("raft.bind must be set when raft.enabled=true")
+		}
+		if c.Raft.DataDir == "" {
+			return fmt.Errorf("raft.data_dir must be set when raft.enabled=true")
+		}
+		for i, p := range c.Raft.Peers {
+			if p.ID == "" || p.Addr == "" {
+				return fmt.Errorf("raft.peers[%d]: both id and addr required", i)
+			}
+		}
 	}
 	switch strings.ToLower(c.Logging.Format) {
 	case "text", "json":

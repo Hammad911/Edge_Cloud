@@ -12,7 +12,7 @@ This is the implementation companion to the project proposal *Scalable Consisten
 
 ## Status
 
-Phase 0 — infrastructure is in place. Services (Raft, causal replication, storage) plug into the lifecycle via `internal/app` as they are implemented.
+Milestone 3 complete — intra-cluster Raft consensus is live. A 3-node edge cluster elects a leader, replicates KV writes through the Raft log, and survives follower restarts. Causal replication between clusters (Milestone 5) is next.
 
 What already works:
 - Structured logging (`log/slog`), JSON or text
@@ -20,10 +20,15 @@ What already works:
 - Prometheus metrics endpoint (`/metrics`)
 - Liveness + readiness endpoints (`/healthz`, `/readyz`)
 - Optional pprof (`/debug/pprof/*`)
-- gRPC server with health service + reflection
+- gRPC KV service (`Get`/`Put`/`Delete`) with HLC-based causal tokens
+- Versioned in-memory KV store with snapshot/restore
+- Hybrid Logical Clock (`pkg/hlc`) + partitioned HLC for scalable causal metadata
+- Raft consensus (`pkg/raft`) wrapping `hashicorp/raft` + BoltDB log/stable stores
+- Cluster admin HTTP API (`/cluster/status`, `/cluster/join`, `/cluster/leave`)
 - Graceful shutdown via `errgroup` + signal handling
 - Multi-stage Dockerfiles (distroless runtime)
 - docker-compose for 1 cloud + 2 edge nodes
+- Local 3-node cluster scripts (`make cluster-up` / `make cluster-down`)
 
 ---
 
@@ -62,6 +67,25 @@ Inspect gRPC services:
 ```bash
 grpcurl -plaintext 127.0.0.1:7001 list
 ```
+
+### Running a 3-node Raft edge cluster
+
+```bash
+make cluster-up          # boots edge-1 (leader) + edge-2 + edge-3
+make cluster-status      # shows leader across all three nodes
+
+# Drive traffic through the leader
+./bin/kvsmoke -addr 127.0.0.1:7001 put hello world
+./bin/kvsmoke -addr 127.0.0.1:7002 get hello   # reads replicated on a follower
+./bin/kvsmoke -addr 127.0.0.1:7001 bench 500   # 500 serial Puts through Raft
+
+make cluster-down        # clean shutdown
+make clean-data          # wipe raft data dirs
+```
+
+Writes to a follower are refused with `FailedPrecondition: kv: not leader`; the
+follower exposes the current leader via `GET /cluster/status` so a smart client
+can redirect.
 
 ---
 
@@ -119,6 +143,8 @@ docs/                # Architecture notes and final report material
 |---|---|
 | `make build` | Build all binaries into `bin/` |
 | `make run-edge` / `make run-cloud` | Run a single node with local config |
+| `make cluster-up` / `make cluster-down` | Launch/stop a local 3-node Raft edge cluster |
+| `make cluster-status` | Print leader/follower status for all local nodes |
 | `make test` | Race-enabled test suite |
 | `make cover` | Test with coverage + HTML report |
 | `make lint` | Run `golangci-lint` |
@@ -143,12 +169,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
-## Next implementation milestones
+## Implementation roadmap
 
-1. **HLC** in `pkg/hlc` (with partitioned variant, full tests)
-2. **Versioned KV** in `pkg/storage` (multi-version store for causal reads)
-3. **Client KV service** on gRPC, wired into `edge-node`
-4. **Raft** in `pkg/raft` (in-cluster consensus)
-5. **Causal replication** in `pkg/causal` (cross-cluster)
+1. ~~**HLC** in `pkg/hlc` (with partitioned variant, full tests)~~ ✓ *Milestone 1*
+2. ~~**Versioned KV** in `pkg/storage` (multi-version store for causal reads)~~ ✓ *Milestone 1*
+3. ~~**Client KV service** on gRPC, wired into `edge-node`~~ ✓ *Milestone 2*
+4. ~~**Raft** in `pkg/raft` (in-cluster consensus)~~ ✓ *Milestone 3*
+5. **Causal replication** in `pkg/causal` (cross-cluster) — *next*
 6. **Simulator** in `simulation/` (10 → 500 edge sites)
 7. **Evaluation** — YCSB, fault injection, Jepsen-style checker

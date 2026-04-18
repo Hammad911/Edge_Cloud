@@ -32,6 +32,18 @@ type App struct {
 	Metrics *observability.Registry
 	Admin   *server.AdminServer
 	GRPC    *server.GRPCServer
+
+	// closers are invoked in LIFO order during shutdown, after the servers
+	// have been stopped. They are the place to release stateful resources
+	// (raft, storage, replication buffers, …).
+	closers []func() error
+}
+
+// OnShutdown registers a hook to run after all servers have been stopped.
+// Hooks are invoked in reverse registration order. Errors are logged but
+// do not prevent subsequent hooks from running.
+func (a *App) OnShutdown(fn func() error) {
+	a.closers = append(a.closers, fn)
 }
 
 // New constructs an App from the given config. It builds the logger, metric
@@ -89,12 +101,23 @@ func (a *App) Run(ctx context.Context) error {
 
 	a.Admin.MarkReady()
 
-	if err := g.Wait(); err != nil && !isShutdown(ctx, err) {
-		a.Logger.Error("node exited with error", slog.Any("err", err))
-		return err
+	runErr := g.Wait()
+	a.runClosers()
+	if runErr != nil && !isShutdown(ctx, runErr) {
+		a.Logger.Error("node exited with error", slog.Any("err", runErr))
+		return runErr
 	}
 	a.Logger.Info("node stopped")
 	return nil
+}
+
+func (a *App) runClosers() {
+	for i := len(a.closers) - 1; i >= 0; i-- {
+		if err := a.closers[i](); err != nil {
+			a.Logger.Warn("shutdown hook failed", slog.Int("idx", i), slog.Any("err", err))
+		}
+	}
+	a.closers = nil
 }
 
 func isShutdown(ctx context.Context, err error) bool {

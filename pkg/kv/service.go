@@ -33,7 +33,29 @@ type Service interface {
 var (
 	ErrEmptyKey   = errors.New("kv: key must not be empty")
 	ErrValueLimit = errors.New("kv: value exceeds configured size limit")
+	ErrNotLeader  = errors.New("kv: not leader")
 )
+
+// Op identifies a mutation type routed through the replication layer.
+type Op uint8
+
+const (
+	// OpPut proposes a key/value write.
+	OpPut Op = 1
+	// OpDelete proposes a tombstone.
+	OpDelete Op = 2
+)
+
+// Replicator is the optional consensus dependency of the Service. When set,
+// every mutation is proposed through the replicator before returning to the
+// client; the FSM behind the replicator is responsible for applying the
+// mutation to the local store. When nil, mutations are applied directly
+// (useful for local development and for non-replicated deployments).
+type Replicator interface {
+	Apply(ctx context.Context, op Op, key string, value []byte, ts hlc.Timestamp) error
+	IsLeader() bool
+	Leader() string
+}
 
 // Config controls Service behavior.
 type Config struct {
@@ -46,22 +68,37 @@ func DefaultConfig() Config {
 	return Config{MaxValueBytes: 1 << 20} // 1 MiB
 }
 
-// service is the default Service implementation, backed by an HLC + Store.
+// service is the default Service implementation, backed by an HLC + Store,
+// optionally gated by a Replicator for strong consistency inside a cluster.
 type service struct {
-	cfg   Config
-	clock *hlc.Clock
-	store storage.Store
+	cfg        Config
+	clock      *hlc.Clock
+	store      storage.Store
+	replicator Replicator // may be nil
+}
+
+// Option configures the Service at construction time.
+type Option func(*service)
+
+// WithReplicator attaches a consensus Replicator. All mutations then flow
+// through it; direct store writes are only used when the replicator is nil.
+func WithReplicator(r Replicator) Option {
+	return func(s *service) { s.replicator = r }
 }
 
 // New constructs a Service. The clock and store must be non-nil.
-func New(cfg Config, clock *hlc.Clock, store storage.Store) Service {
+func New(cfg Config, clock *hlc.Clock, store storage.Store, opts ...Option) Service {
 	if clock == nil {
 		panic("kv.New: clock must not be nil")
 	}
 	if store == nil {
 		panic("kv.New: store must not be nil")
 	}
-	return &service{cfg: cfg, clock: clock, store: store}
+	s := &service{cfg: cfg, clock: clock, store: store}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 func (s *service) Get(ctx context.Context, key string, after hlc.Timestamp) ([]byte, bool, hlc.Timestamp, error) {
@@ -120,6 +157,12 @@ func (s *service) Put(ctx context.Context, key string, value []byte, after hlc.T
 	}
 
 	ts := s.clock.Now()
+	if s.replicator != nil {
+		if err := s.replicator.Apply(ctx, OpPut, key, value, ts); err != nil {
+			return hlc.Timestamp{}, fmt.Errorf("kv.Put: %w", err)
+		}
+		return ts, nil
+	}
 	if err := s.store.Put(key, value, ts); err != nil {
 		return hlc.Timestamp{}, fmt.Errorf("kv.Put: %w", err)
 	}
@@ -141,6 +184,12 @@ func (s *service) Delete(ctx context.Context, key string, after hlc.Timestamp) (
 	}
 
 	ts := s.clock.Now()
+	if s.replicator != nil {
+		if err := s.replicator.Apply(ctx, OpDelete, key, nil, ts); err != nil {
+			return hlc.Timestamp{}, fmt.Errorf("kv.Delete: %w", err)
+		}
+		return ts, nil
+	}
 	if err := s.store.Delete(key, ts); err != nil {
 		return hlc.Timestamp{}, fmt.Errorf("kv.Delete: %w", err)
 	}

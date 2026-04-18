@@ -38,6 +38,20 @@ type AdminServer struct {
 	ready atomic.Bool
 	srv   *http.Server
 	ln    net.Listener
+	mux   *http.ServeMux
+}
+
+// Handle registers an additional HTTP handler on the admin mux. Use this
+// from subsystem bring-up (e.g. raft cluster admin, debug routes). Safe to
+// call before or after Serve begins, as net/http.ServeMux permits
+// concurrent registrations.
+func (a *AdminServer) Handle(pattern string, h http.Handler) {
+	a.mux.Handle(pattern, h)
+}
+
+// HandleFunc is the HandlerFunc variant of Handle.
+func (a *AdminServer) HandleFunc(pattern string, fn http.HandlerFunc) {
+	a.mux.HandleFunc(pattern, fn)
 }
 
 // NewAdminServer wires the admin mux but does not start listening yet.
@@ -79,6 +93,7 @@ func NewAdminServer(
 	}
 
 	a.ln = ln
+	a.mux = mux
 	a.srv = &http.Server{
 		Handler:           mux,
 		ReadTimeout:       cfg.ReadTimeout,

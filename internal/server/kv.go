@@ -115,6 +115,8 @@ func mapError(err error) error {
 		return status.Error(codes.InvalidArgument, err.Error())
 	case errors.Is(err, kv.ErrValueLimit):
 		return status.Error(codes.InvalidArgument, err.Error())
+	case errors.Is(err, kv.ErrNotLeader):
+		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, hlc.ErrClockDrift):
 		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, context.Canceled):

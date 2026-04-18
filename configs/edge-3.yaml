@@ -1,0 +1,43 @@
+node:
+  id: "edge-3"
+  role: "edge"
+  datacenter: "dc-1"
+
+admin:
+  listen_addr: "127.0.0.1:8083"
+  read_timeout: "5s"
+  write_timeout: "30s"
+  shutdown_grace: "10s"
+  enable_metrics: true
+  enable_pprof: false
+
+grpc:
+  listen_addr: "127.0.0.1:7003"
+  max_recv_msg_bytes: 16777216
+  max_send_msg_bytes: 16777216
+  keepalive_interval: "30s"
+  keepalive_timeout: "10s"
+  enable_reflection: true
+  shutdown_grace: "10s"
+
+raft:
+  enabled: true
+  cluster_id: "edge-cluster-1"
+  bind: "127.0.0.1:7103"
+  advertise_addr: "127.0.0.1:7103"
+  data_dir: "./data/edge-3/raft"
+  bootstrap: false
+  snapshot_interval: "120s"
+  snapshot_threshold: 8192
+  apply_timeout: "5s"
+  peers: []
+
+replication:
+  enabled: false
+  cloud_addr: "127.0.0.1:9001"
+  peers: []
+  buffer_dir: "./data/edge-3/buffer"
+
+logging:
+  level: "info"
+  format: "text"

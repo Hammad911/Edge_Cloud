@@ -6,7 +6,7 @@ LDFLAGS := -X edge-cloud-replication/internal/app.Version=$(VERSION) -s -w
 
 BIN_DIR := bin
 
-BINARIES := edge-node cloud-node simulator checker benchmark
+BINARIES := edge-node cloud-node simulator checker benchmark kvsmoke
 
 .PHONY: all
 all: build
@@ -65,6 +65,32 @@ run-edge:
 .PHONY: run-cloud
 run-cloud:
 	go run ./cmd/cloud-node -config configs/cloud.yaml
+
+# Launch a local 3-node Raft edge cluster. Each target runs in the
+# foreground; open three terminals (or use `make cluster-up`).
+.PHONY: run-edge-1 run-edge-2 run-edge-3
+run-edge-1:
+	go run ./cmd/edge-node -config configs/edge-1.yaml
+run-edge-2:
+	go run ./cmd/edge-node -config configs/edge-2.yaml
+run-edge-3:
+	go run ./cmd/edge-node -config configs/edge-3.yaml
+
+# ---- local cluster scripts ----
+.PHONY: cluster-up cluster-down cluster-status
+cluster-up:
+	./scripts/cluster_up.sh
+cluster-down:
+	./scripts/cluster_down.sh
+cluster-status:
+	@for p in 8081 8082 8083; do \
+	  echo "=== 127.0.0.1:$$p ==="; \
+	  curl -s http://127.0.0.1:$$p/cluster/status | python3 -m json.tool || true; \
+	done
+
+.PHONY: clean-data
+clean-data:
+	rm -rf data/
 
 # ---- docker ----
 .PHONY: docker-edge docker-cloud
