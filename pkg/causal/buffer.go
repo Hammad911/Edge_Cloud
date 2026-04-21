@@ -147,6 +147,29 @@ func (b *Buffer) AdvanceFrontier(origin hlc.GroupID, ts hlc.Timestamp) {
 	}
 }
 
+// MarkApplied records that an event with (origin, ts) has been applied
+// to the local store *outside* the buffer's normal Admit/Deliver path —
+// i.e. as the result of a local write. After MarkApplied returns, the
+// buffer will:
+//
+//   - Treat any subsequent Admit of the same (origin, ts) as a duplicate
+//     (so the cloud can fan an edge's event back to itself without
+//     causing re-application).
+//   - Report depsSatisfied for any pending event that requires
+//     frontier[origin] >= ts.
+//
+// This is the symmetry between local writes and remote applies that
+// makes a "every site is its own group" topology work correctly.
+func (b *Buffer) MarkApplied(origin hlc.GroupID, ts hlc.Timestamp) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.dedup[dedupKey{Origin: origin, TS: ts}] = struct{}{}
+	cur := b.frontier[origin]
+	if ts.After(cur) {
+		b.frontier[origin] = ts
+	}
+}
+
 // Frontier returns a snapshot of the delivered frontier.
 func (b *Buffer) Frontier() hlc.PartitionedTimestamp {
 	b.mu.Lock()

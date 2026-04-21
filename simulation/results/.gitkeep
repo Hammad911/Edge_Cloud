@@ -1,0 +1,2 @@
+# Simulator run artifacts land here (per-scale JSON + scaling summary tables).
+# Tracked run outputs are .gitignored; this file just keeps the directory alive.

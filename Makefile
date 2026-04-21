@@ -6,7 +6,7 @@ LDFLAGS := -X edge-cloud-replication/internal/app.Version=$(VERSION) -s -w
 
 BIN_DIR := bin
 
-BINARIES := edge-node cloud-node kvsmoke
+BINARIES := edge-node cloud-node kvsmoke simulator
 
 .PHONY: all
 all: build
@@ -103,6 +103,19 @@ causal-status:
 .PHONY: clean-data
 clean-data:
 	rm -rf data/
+
+# ---- simulator (in-process N-edge + 1-cloud) ----
+.PHONY: sim-small sim-medium sim-large sim-xlarge sim-scaling
+sim-small: build
+	./bin/simulator -scenario small -duration 5s -qps 10 -wan-latency 25ms
+sim-medium: build
+	./bin/simulator -scenario medium -duration 8s -qps 10 -wan-latency 25ms
+sim-large: build
+	./bin/simulator -scenario large -duration 10s -qps 8 -wan-latency 25ms
+sim-xlarge: build
+	./bin/simulator -scenario xlarge -duration 12s -qps 4 -wan-latency 30ms
+sim-scaling: build
+	./scripts/sim_scaling.sh
 
 # ---- docker ----
 .PHONY: docker-edge docker-cloud

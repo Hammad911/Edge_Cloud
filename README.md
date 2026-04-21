@@ -12,7 +12,7 @@ This is the implementation companion to the project proposal *Scalable Consisten
 
 ## Status
 
-Milestone 5 complete — cross-cluster causal replication is live. Edge clusters and the cloud hub stream causally-tagged writes over a long-lived gRPC bidi channel; receivers buffer events whose dependencies aren't yet satisfied and apply them in causal order via partitioned HLCs. A 1-cloud + 2-edge topology demonstrates write on edge-A reading on edge-B (and vice versa), including deletes, with self-loop suppression and dedup. Up next: scaling the simulator from 10 → 500 sites and a Jepsen-style causality checker.
+Milestone 6 complete — an in-process discrete-event simulator now drives the same `pkg/causal`/`pkg/hlc`/`pkg/storage` stack across hub-and-spoke topologies of 10, 50, 100, and 500 edge sites. A scheduler-backed mock network injects per-link latency, jitter, loss, and partitions; workloads (uniform / Zipfian, configurable read-write mix) emit reproducible op streams; a runtime causality checker verifies that no remote apply ever violates partitioned-HLC dependencies. The latest scaling sweep (8s, 8 QPS/site) completes 0 violations across all four scales, with replication lag growing as the cloud hub becomes the bottleneck — exactly the behaviour the proposal aims to characterise.
 
 What already works:
 - Structured logging (`log/slog`), JSON or text
@@ -31,6 +31,8 @@ What already works:
 - docker-compose for 1 cloud + 2 edge nodes
 - Local 3-node Raft cluster scripts (`make cluster-up`)
 - **Local 1-cloud + 2-edge causal topology scripts (`make causal-up`)**
+- **In-process simulator** (`cmd/simulator`, `simulation/{network,site,topology,workload,metrics,checker}`) scaling 10 → 500 sites, with a runtime causality checker that asserts zero partitioned-HLC violations under uniform/Zipfian workloads and lossy WAN links
+- **In-process simulator** (`cmd/simulator`, `simulation/{network,site,topology,workload,metrics,checker}`) that scales 10 → 500 sites, with a runtime causality checker
 
 ---
 
@@ -120,6 +122,39 @@ How it works:
   with raft enabled funnel remote events through the raft log so every
   follower sees them.
 
+### Running the in-process simulator (10 → 500 sites)
+
+```bash
+make sim-small     # 10 edges, 5s
+make sim-medium    # 50 edges
+make sim-large     # 100 edges
+make sim-xlarge    # 500 edges
+
+# scaling sweep — JSON per scale + summary table in simulation/results/
+make sim-scaling
+```
+
+Or drive it directly:
+
+```bash
+./bin/simulator -sites 100 -duration 10s -qps 10 \
+                -wan-latency 25ms -dist zipf -loss-rate 0.02 \
+                -out simulation/results/run.json
+```
+
+The simulator reuses the production `pkg/causal`, `pkg/hlc`, and `pkg/storage`
+code paths; only the transport is mocked (a heap-scheduled delay/jitter/loss/
+partition bus). A runtime causality checker verifies that no remote apply
+violates partitioned-HLC dependencies. Representative scaling numbers
+(8s run, 8 QPS/site, Uniform, 25ms WAN):
+
+| sites | ops/sec | lag p50 | lag p95 | lag p99 | violations |
+|------:|--------:|--------:|--------:|--------:|-----------:|
+|    10 |   ~160  |  51 ms  |  59 ms  |  60 ms  |      0     |
+|    50 |   ~790  |  54 ms  |  68 ms  |  77 ms  |      0     |
+|   100 | ~1 580  |  72 ms  | 138 ms  | 188 ms  |      0     |
+|   500 | ~7 570  | 1.68 s  | 5.63 s  | 5.95 s  |      0     |
+
 ---
 
 ## Configuration
@@ -179,6 +214,8 @@ docs/                # Architecture notes and final report material
 | `make cluster-up` / `make cluster-down` | Launch/stop a local 3-node Raft edge cluster |
 | `make cluster-status` | Print leader/follower status for all local nodes |
 | `make causal-up` / `make causal-down` | Launch/stop a 1-cloud + 2-edge causal-replication topology |
+| `make sim-small|medium|large|xlarge` | Run the in-process simulator at 10/50/100/500 sites |
+| `make sim-scaling` | Run the scaling sweep and emit per-scale JSON + summary table |
 | `make test` | Race-enabled test suite |
 | `make cover` | Test with coverage + HTML report |
 | `make lint` | Run `golangci-lint` |
@@ -210,5 +247,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 3. ~~**Client KV service** on gRPC, wired into `edge-node`~~ ✓ *Milestone 2*
 4. ~~**Raft** in `pkg/raft` (in-cluster consensus)~~ ✓ *Milestone 3*
 5. ~~**Causal replication** in `pkg/causal` (cross-cluster)~~ ✓ *Milestone 5*
-6. **Simulator** in `simulation/` (10 → 500 edge sites) — *next*
-7. **Evaluation** — YCSB, fault injection, Jepsen-style checker
+6. ~~**Simulator** in `simulation/` (10 → 500 edge sites)~~ ✓ *Milestone 6*
+7. **Evaluation** — YCSB, fault injection, Jepsen-style checker — *next*

@@ -6,6 +6,10 @@ logs/
 coverage.out
 coverage.html
 
+# simulator run artifacts (timestamped JSON + summary tables)
+simulation/results/*.json
+simulation/results/*.txt
+
 .DS_Store
 
 .idea/
