@@ -20,10 +20,13 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
+	"edge-cloud-replication/pkg/causal"
+	"edge-cloud-replication/simulation/baselines"
 	"edge-cloud-replication/simulation/checker"
 	"edge-cloud-replication/simulation/fault"
 	"edge-cloud-replication/simulation/metrics"
@@ -154,6 +157,12 @@ type sceneResult struct {
 
 	// Fault is populated only when a partition scenario was scheduled.
 	Fault *faultResult `json:"fault,omitempty"`
+
+	// Metadata reports the metadata-per-event cost this workload would
+	// impose under each replication scheme we compare against. It is
+	// computed from the exact event stream our partitioned-HLC runs
+	// produced, so the schemes are directly comparable.
+	Metadata baselines.Report `json:"metadata"`
 }
 
 type faultResult struct {
@@ -202,6 +211,11 @@ func main() {
 		phases = metrics.NewPhaseTracker()
 	}
 
+	// Metadata accounting spans the total system size (edges + cloud)
+	// so the VectorClock model sees the real N.
+	meta := baselines.NewRollingStats(f.sites + 1)
+	var metaMu sync.Mutex
+
 	var localApplies, remoteApplies atomic.Int64
 
 	observer := func(ev site.ApplyEvent) {
@@ -211,6 +225,16 @@ func main() {
 			if !ev.Deleted {
 				lag.RecordWrite(ev.Key, ev.Value, ev.At)
 			}
+			metaMu.Lock()
+			meta.Record(&causal.Event{
+				Origin:   ev.Origin,
+				Key:      ev.Key,
+				Value:    ev.Value,
+				Deleted:  ev.Deleted,
+				CommitTS: ev.CommitTS,
+				Deps:     ev.Deps,
+			})
+			metaMu.Unlock()
 		case site.ApplyRemote:
 			remoteApplies.Add(1)
 			if !ev.Deleted {
@@ -360,6 +384,10 @@ func main() {
 		res.Fault = partitionResult
 	}
 
+	metaMu.Lock()
+	res.Metadata = meta.Snapshot()
+	metaMu.Unlock()
+
 	printHumanResults(res, time.Since(runStart))
 
 	if f.out != "" {
@@ -507,6 +535,43 @@ func printHumanResults(r sceneResult, total time.Duration) {
 	fmt.Printf("  causal violations : %d\n", r.CausalViolations)
 	fmt.Printf("  goroutines        : %d\n", r.NumGoroutines)
 	fmt.Printf("  wallclock         : %s\n", total.Truncate(time.Millisecond))
+	if r.Metadata.Events > 0 {
+		fmt.Println("─── metadata-per-event vs. baseline schemes ──────────────────")
+		for _, s := range []string{"eventual", "lamport", "partitioned_hlc", "vector_clock"} {
+			sr := r.Metadata.Schemes[s]
+			fmt.Printf("  %-16s : mean=%.2f B/event  total=%d B\n",
+				s, sr.MetadataBytesMean, sr.MetadataBytesTotal)
+		}
+		pHLC := r.Metadata.Schemes["partitioned_hlc"].MetadataBytesMean
+		vc := r.Metadata.Schemes["vector_clock"].MetadataBytesMean
+		if pHLC > 0 && vc > 0 {
+			switch {
+			case pHLC < vc:
+				fmt.Printf("  partitioned-HLC is %.1fx smaller than vector clock\n", vc/pHLC)
+			case pHLC > vc:
+				fmt.Printf("  partitioned-HLC is %.1fx larger than vector clock "+
+					"(simulator runs one group per site; the win materialises when "+
+					"G << N — see metadata projection below)\n", pHLC/vc)
+			}
+		}
+		// Projection: what each scheme would cost in a deployment with
+		// N sites clustered into G groups (K sites per group), holding
+		// the measured average dep fan-out fixed.
+		if r.NumSites > 0 && r.Metadata.Events > 0 {
+			avgDeps := baselines.EventsAvgDeps(&r.Metadata, r.NumSites+1)
+			fmt.Printf("  projected metadata at N=%d, avg deps/event=%.1f:\n",
+				r.NumSites+1, avgDeps)
+			for _, g := range []int{4, 8, 16, 32} {
+				if g > r.NumSites+1 {
+					break
+				}
+				proj := baselines.Project(avgDeps, r.NumSites+1, g)
+				fmt.Printf("    G=%2d groups :  pHLC=%6.1f B   VC=%6.1f B   ratio=%.2fx\n",
+					g, proj.PartitionedHLC, proj.VectorClock,
+					proj.VectorClock/proj.PartitionedHLC)
+			}
+		}
+	}
 	if r.Fault != nil {
 		fmt.Println("─── fault-injection phases ───────────────────────────────────")
 		fmt.Printf("  partition         : %d edges, +%s for %s\n",

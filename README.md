@@ -14,7 +14,7 @@ This is the implementation companion to the project proposal *Scalable Consisten
 
 Milestone 6 complete — an in-process discrete-event simulator now drives the same `pkg/causal`/`pkg/hlc`/`pkg/storage` stack across hub-and-spoke topologies of 10, 50, 100, and 500 edge sites. A scheduler-backed mock network injects per-link latency, jitter, loss, and partitions; workloads (uniform / Zipfian, configurable read-write mix) emit reproducible op streams; a runtime causality checker verifies that no remote apply ever violates partitioned-HLC dependencies. The latest scaling sweep (8s, 8 QPS/site) completes 0 violations across all four scales, with replication lag growing as the cloud hub becomes the bottleneck — exactly the behaviour the proposal aims to characterise.
 
-**Milestone 7 in progress** — fault-injection harness (`simulation/fault`) is live. A scheduled partition/heal runner drives the WAN bus while the simulator records per-phase (before / during / after) throughput, local-op latency, replication lag, and post-heal convergence time. Sweeps across (10→50 sites) × (10%→50% partitioned edges) report **zero causality violations across every combination** and convergence bounded to ~6.2 s regardless of scale.
+**Milestone 7 in progress** — fault-injection harness (`simulation/fault`) and metadata-size baselines (`simulation/baselines`) are live. A scheduled partition/heal runner drives the WAN bus while the simulator records per-phase (before / during / after) throughput, local-op latency, replication lag, and post-heal convergence time; sweeps across (10→50 sites) × (10%→50% partitioned edges) report **zero causality violations** and convergence bounded to ~6.2 s regardless of scale. The baselines module measures the metadata footprint of eventual / Lamport / partitioned-HLC / full vector clock against the same event stream: at 200 sites clustered into 8 groups, partitioned HLC uses **~12.6× less metadata per event** than a full vector clock.
 
 What already works:
 - Structured logging (`log/slog`), JSON or text
@@ -185,6 +185,39 @@ never block on the WAN) and **zero causality violations are observed
 throughout** — the partitioned HLC keeps the buffer honest even while a
 third of the edges are isolated.
 
+### Metadata-size baselines (Milestone 7, part 2)
+
+`simulation/baselines` models the per-event metadata cost of four
+consistency schemes and measures all of them against the *exact* event
+stream the partitioned-HLC simulator produces, so the numbers are
+directly comparable:
+
+- **Eventual** (LWW broadcast, 0 bytes metadata)
+- **Lamport** (single 8-byte scalar)
+- **Partitioned HLC** (our scheme — one `(group_id, hlc)` pair per dep)
+- **Vector Clock** (one 8-byte counter per site, O(N))
+
+```bash
+make sim-baselines          # sweep sites=10..200, tabulate bytes/event
+```
+
+Representative run (5s, 20 QPS/site, uniform workload, 25 ms WAN):
+
+| sites | VC metadata | pHLC metadata @ G=8 clusters |
+|------:|------------:|-----------------------------:|
+|    10 |     88 B    |    128 B                     |
+|    25 |    208 B    |    128 B                     |
+|    50 |    408 B    |    128 B                     |
+|   100 |    808 B    |    128 B  (**6.3× smaller**) |
+|   200 |  1 608 B    |    128 B  (**12.6× smaller**) |
+
+Every simulator run prints a *projection* block showing what each scheme
+would cost under clustering configurations of G = 4, 8, 16, 32 groups.
+At N = 100 sites, clustered into 8 groups, partitioned HLC is 6.3×
+smaller than a vector clock; at 200 sites it is 12.6× smaller. This is
+the paper's central scaling claim, grounded in the system's actual
+event stream.
+
 ---
 
 ## Configuration
@@ -248,6 +281,7 @@ docs/                # Architecture notes and final report material
 | `make sim-scaling` | Run the scaling sweep and emit per-scale JSON + summary table |
 | `make sim-fault-demo` | Single-partition demo with phase-aware metrics |
 | `make sim-fault` | Sweep partition scenarios across site counts and fractions |
+| `make sim-baselines` | Metadata-per-event comparison vs. eventual / Lamport / vector clock |
 | `make test` | Race-enabled test suite |
 | `make cover` | Test with coverage + HTML report |
 | `make lint` | Run `golangci-lint` |
@@ -282,7 +316,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 6. ~~**Simulator** in `simulation/` (10 → 500 edge sites)~~ ✓ *Milestone 6*
 7. **Evaluation** — Milestone 7 in progress:
    - ~~Fault-injection harness (`simulation/fault`) + phase-aware metrics~~ ✓
-   - Baselines (eventual, full vector clock) for scaling comparison — *next*
-   - Offline history checker (monotonic reads, read-your-writes, convergence)
+   - ~~Metadata-size baselines (eventual / Lamport / vector clock) with clustering projection~~ ✓
+   - Offline history checker (monotonic reads, read-your-writes, convergence) — *next*
    - YCSB-style closed-loop driver for the real gRPC binaries
    - Paper figures generated from JSON results

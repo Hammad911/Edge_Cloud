@@ -127,6 +127,13 @@ sim-fault-demo: build
 	    -keys 500 -write-ratio 0.4 -progress 0 \
 	    -out simulation/results/fault_demo.json
 
+# Baselines: emit metadata-per-event comparison across consistency
+# schemes (eventual, lamport, partitioned-HLC, vector clock) at
+# multiple scales.
+.PHONY: sim-baselines
+sim-baselines: build
+	./scripts/sim_baselines.sh
+
 # ---- docker ----
 .PHONY: docker-edge docker-cloud
 docker-edge:
