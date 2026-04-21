@@ -3,7 +3,17 @@
 # Install with:
 #     python3 -m pip install --user -r scripts/requirements.txt
 #
-# Pinned to the versions used to generate the figures currently
-# committed under docs/figures/ so builds stay reproducible.
-matplotlib==3.9.4
-numpy==2.0.2
+# Version ranges (rather than exact pins) so pip resolves to a
+# *prebuilt wheel* that matches whichever Python interpreter the user
+# has on PATH. The figure script itself uses a tiny, stable slice of
+# the matplotlib / numpy API that has been unchanged for years, so any
+# version inside these bounds reproduces the committed figures
+# faithfully.
+#
+# If you want bit-identical rendering to the PNGs checked in under
+# docs/figures/, pin to matplotlib==3.9.4 and numpy==2.0.2 under
+# Python 3.11 or 3.12 (both ship prebuilt wheels). On Python 3.13
+# those old numpy wheels do not exist and pip will try to build from
+# source, which fails on Clang 17 -- so we default to a range.
+matplotlib>=3.8,<4
+numpy>=1.26,<3
