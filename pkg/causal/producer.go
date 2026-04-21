@@ -180,6 +180,42 @@ func (o *Outbox) Unsubscribe(name string) {
 	o.cond.Broadcast()
 }
 
+// Pending returns the number of events in the outbox that this
+// subscriber has not yet acked (i.e. have id > its cursor). Returns 0
+// when the subscriber is unknown or no buffered events qualify.
+func (o *Outbox) Pending(name string) int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	cursor, ok := o.subscribers[name]
+	if !ok {
+		return 0
+	}
+	var n int
+	for _, e := range o.events {
+		if e.id > cursor {
+			n++
+		}
+	}
+	return n
+}
+
+// TotalPending returns the aggregate number of (subscriber, event) pairs
+// that have not yet been acked. Useful as a strong "everything is
+// settled" signal for tests and offline checkers.
+func (o *Outbox) TotalPending() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	var n int
+	for _, cursor := range o.subscribers {
+		for _, e := range o.events {
+			if e.id > cursor {
+				n++
+			}
+		}
+	}
+	return n
+}
+
 // Next blocks until an event with id > cursor is available for the named
 // subscriber, then returns the next such event and the new cursor. Returns
 // nil, 0, ctx.Err() when the context is cancelled or the outbox is closed.

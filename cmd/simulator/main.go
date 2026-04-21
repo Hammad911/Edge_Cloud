@@ -423,7 +423,19 @@ func main() {
 	// such hops, so we need a generous settling window.
 	if history != nil {
 		sites := topo.Sites()
-		if err := waitForAppliesQuiescent(context.Background(), sites, topo.Network, 5*time.Second); err != nil {
+		// Budget for the "every pipeline is quiet" barrier. Fault runs
+		// need a lot more slack because the post-heal backlog has to
+		// drain over the WAN one event per tick: partition-duration
+		// worth of accumulated writes × wan-latency is a useful lower
+		// bound, then we add generous cushion for worst-case backoff.
+		quiesceBudget := 10 * time.Second
+		if faultEnabled {
+			quiesceBudget = f.faultPartitionDuration*4 + 30*f.wanLatency + 10*time.Second
+			if quiesceBudget < 30*time.Second {
+				quiesceBudget = 30 * time.Second
+			}
+		}
+		if err := waitForAppliesQuiescent(context.Background(), sites, topo.Network, quiesceBudget); err != nil {
 			fmt.Fprintf(os.Stderr, "history quiesce: %v\n", err)
 		}
 		historyKeys.Range(func(k, _ any) bool {
@@ -590,18 +602,19 @@ func waitForAppliesQuiescent(ctx context.Context, sites []*site.Site, net *netwo
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 
-	snapshot := func() (int64, int64) {
-		var total, buffered int64
+	snapshot := func() (total, buffered, outboxPending, inboxPending int64) {
 		for _, st := range sites {
 			s := st.Stats()
 			total += s.EventsApplied + s.EventsReceived + s.EventsShipped +
 				s.LocalPuts + s.LocalDeletes
 			buffered += s.EventsBuffered
+			outboxPending += s.OutboxPending
+			inboxPending += s.InboxPending
 		}
-		return total, buffered
+		return total, buffered, outboxPending, inboxPending
 	}
 	stable := 0
-	prevTotal, _ := snapshot()
+	prevTotal, _, _, _ := snapshot()
 	prevNet := net.Stats()
 	for {
 		if time.Now().After(deadline) {
@@ -611,21 +624,41 @@ func waitForAppliesQuiescent(ctx context.Context, sites []*site.Site, net *netwo
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-tick.C:
-			curTotal, curBuffered := snapshot()
+			curTotal, curBuffered, curOutbox, curInbox := snapshot()
 			curNet := net.Stats()
 			inFlight := curNet.Sent - curNet.Delivered - curNet.Dropped
+			// The system is settled iff:
+			//  - no causal buffer is holding events back waiting on deps,
+			//  - no outbox has un-shipped events for any subscriber,
+			//  - no inbox channel has undrained events waiting for
+			//    the receiver goroutine to pick them up,
+			//  - no in-flight messages remain on the simulated wire,
+			//  - and the totals have not advanced since the last tick.
+			debug := os.Getenv("SIM_DEBUG_QUIESCE") != ""
 			if curBuffered == 0 &&
+				curOutbox == 0 &&
+				curInbox == 0 &&
 				curTotal == prevTotal &&
 				curNet.Sent == prevNet.Sent &&
 				inFlight == 0 {
 				stable++
 				if stable >= 3 {
+					if debug {
+						fmt.Fprintf(os.Stderr,
+							"[quiesce] settled: total=%d netSent=%d\n",
+							curTotal, curNet.Sent)
+					}
 					return nil
 				}
 			} else {
 				stable = 0
 				prevTotal = curTotal
 				prevNet = curNet
+				if debug {
+					fmt.Fprintf(os.Stderr,
+						"[quiesce] busy: total=%d buffered=%d outbox=%d inbox=%d inflight=%d\n",
+						curTotal, curBuffered, curOutbox, curInbox, inFlight)
+				}
 			}
 		}
 	}

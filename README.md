@@ -14,7 +14,7 @@ This is the implementation companion to the project proposal *Scalable Consisten
 
 Milestone 6 complete — an in-process discrete-event simulator now drives the same `pkg/causal`/`pkg/hlc`/`pkg/storage` stack across hub-and-spoke topologies of 10, 50, 100, and 500 edge sites. A scheduler-backed mock network injects per-link latency, jitter, loss, and partitions; workloads (uniform / Zipfian, configurable read-write mix) emit reproducible op streams; a runtime causality checker verifies that no remote apply ever violates partitioned-HLC dependencies. The latest scaling sweep (8s, 8 QPS/site) completes 0 violations across all four scales, with replication lag growing as the cloud hub becomes the bottleneck — exactly the behaviour the proposal aims to characterise.
 
-**Milestone 7 in progress** — fault-injection harness (`simulation/fault`), metadata-size baselines (`simulation/baselines`), and a Jepsen-style **offline history checker** (`evaluation/checker`) are live. A scheduled partition/heal runner drives the WAN bus while the simulator records per-phase (before / during / after) throughput, local-op latency, replication lag, and post-heal convergence time; sweeps across (10→50 sites) × (10%→50% partitioned edges) report **zero causality violations** and convergence bounded to ~6.2 s regardless of scale. The baselines module measures the metadata footprint of eventual / Lamport / partitioned-HLC / full vector clock against the same event stream: at 200 sites clustered into 8 groups, partitioned HLC uses **~12.6× less metadata per event** than a full vector clock. The offline checker replays every op the workload issued (with its HLC commit timestamp and session id) plus a post-quiescence convergence sweep, then verifies **monotonic reads, read-your-writes, no stale reads at origin, and eventual convergence** — all four pass both in a healthy 8-edge scene and under a 30%-edge partition with a 4 s fault window.
+**Milestone 7 in progress** — fault-injection harness (`simulation/fault`), metadata-size baselines (`simulation/baselines`), a Jepsen-style **offline history checker** (`evaluation/checker`), and a **YCSB-style closed-loop driver for the real gRPC binaries** (`evaluation/ycsb`, `cmd/ycsb`) are live. A scheduled partition/heal runner drives the WAN bus while the simulator records per-phase (before / during / after) throughput, local-op latency, replication lag, and post-heal convergence time; sweeps across (10→50 sites) × (10%→50% partitioned edges) report **zero causality violations** and convergence bounded to ~6.2 s regardless of scale. The baselines module measures the metadata footprint of eventual / Lamport / partitioned-HLC / full vector clock against the same event stream: at 200 sites clustered into 8 groups, partitioned HLC uses **~12.6× less metadata per event** than a full vector clock. The offline checker replays every op the workload issued — both in-sim and over real gRPC via the YCSB driver — then verifies **monotonic reads, read-your-writes, no stale reads at origin, and eventual convergence** end to end. A local single-edge YCSB-A smoke run drives the full `pkg/kv` → gRPC → HLC → store stack at **~71 k ops/s** with p99 read/update latency under 550 µs, producing a 285 k-event history that the offline checker audits cleanly.
 
 What already works:
 - Structured logging (`log/slog`), JSON or text
@@ -263,6 +263,49 @@ when the partition started. Each fix was validated by the checker
 re-running on the same history and flipping the relevant property
 from FAIL → PASS.
 
+### YCSB-style closed-loop driver (Milestone 7, part 4)
+
+`evaluation/ycsb` + `cmd/ycsb` is a production-path workload generator
+that talks **real gRPC** to one or more `edge-node` binaries. It carries
+the server's `CausalToken` between ops so session stickiness /
+read-your-writes flows end-to-end, supports the canonical YCSB
+presets (A/B/C/D/F), uniform + Zipfian + latest key distributions,
+and emits a latency-percentile + throughput report plus an optional
+JSONL history that feeds straight into the offline checker described
+above.
+
+```bash
+# One-shot smoke test: spins up a throwaway edge-node, runs YCSB-A and
+# YCSB-B for a few seconds, audits the recorded history:
+make ycsb-smoke
+
+# Custom run against an already-running cluster (any number of
+# endpoints, comma-separated):
+TARGETS=127.0.0.1:7001,127.0.0.1:7002 make ycsb-a
+TARGETS=127.0.0.1:7001               make ycsb-b
+
+# Full flag surface:
+./bin/ycsb -h
+```
+
+Representative numbers from a local single-edge smoke run on an
+Apple-silicon laptop (concurrency = 16, value-size = 64 B, duration
+4 s, sticky sessions, full history capture):
+
+| workload | ops/sec | read p50 / p99 | update p50 / p99 | checker verdict |
+|:--------:|--------:|----------------|------------------|:---------------:|
+| A (50 / 50)  | ~71 k  | 172 µs / 512 µs | 168 µs / 512 µs | all 4 PASS |
+| B (95 / 5)   | ~69 k  | 168 µs / 544 µs | 172 µs / 528 µs | all 4 PASS |
+
+The driver also surfaced a **real server-side contention bug** under
+hot-key Zipfian writes: when two near-simultaneous `Put`s land on the
+same key at very high concurrency, the storage layer rejects the
+second one because its HLC timestamp is not strictly newer (error
+rate ~0.03% in the smoke run, exposed as `kv.Put: storage: write
+timestamp not newer than latest version`). Left as-is for the paper
+so the behaviour is visible; a follow-up will add driver-side retry
+with clock tick.
+
 ---
 
 ## Configuration
@@ -286,7 +329,7 @@ Defaults and shape live in `configs/default.yaml`.
 ## Repo layout
 
 ```
-cmd/                 # Binaries (edge-node, cloud-node, simulator, checker, benchmark)
+cmd/                 # Binaries (edge-node, cloud-node, simulator, checker, ycsb, kvsmoke)
 internal/
   app/               # Lifecycle orchestration
   config/            # Viper-backed typed config
@@ -329,6 +372,8 @@ docs/                # Architecture notes and final report material
 | `make sim-baselines` | Metadata-per-event comparison vs. eventual / Lamport / vector clock |
 | `make sim-check` | Record a history from a healthy run and audit MR / RYW / origin / convergence |
 | `make sim-check-fault` | Same, with a mid-run network partition of 30% of the edges |
+| `make ycsb-smoke` | Launch a throwaway edge-node, run YCSB-A + YCSB-B against real gRPC, audit history |
+| `TARGETS=host:port make ycsb-a` / `ycsb-b` | Run YCSB-A (50/50) / YCSB-B (95/5) against an already-running cluster |
 | `make test` | Race-enabled test suite |
 | `make cover` | Test with coverage + HTML report |
 | `make lint` | Run `golangci-lint` |
@@ -365,6 +410,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
    - ~~Fault-injection harness (`simulation/fault`) + phase-aware metrics~~ ✓
    - ~~Metadata-size baselines (eventual / Lamport / vector clock) with clustering projection~~ ✓
    - ~~Offline history checker (`evaluation/checker`) — MR, RYW, origin freshness, convergence~~ ✓
-   - Offline history checker (monotonic reads, read-your-writes, convergence) — *next*
-   - YCSB-style closed-loop driver for the real gRPC binaries
-   - Paper figures generated from JSON results
+   - ~~YCSB-style closed-loop driver for the real gRPC binaries (`evaluation/ycsb`, `cmd/ycsb`)~~ ✓
+   - Paper figures generated from JSON results — *next*

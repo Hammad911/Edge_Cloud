@@ -6,7 +6,7 @@ LDFLAGS := -X edge-cloud-replication/internal/app.Version=$(VERSION) -s -w
 
 BIN_DIR := bin
 
-BINARIES := edge-node cloud-node kvsmoke simulator checker
+BINARIES := edge-node cloud-node kvsmoke simulator checker ycsb
 
 .PHONY: all
 all: build
@@ -153,6 +153,23 @@ sim-check-fault: build
 	    -history-out simulation/results/history_fault.jsonl \
 	    -out simulation/results/history_fault_run.json
 	./bin/checker -history simulation/results/history_fault.jsonl
+
+# ---- YCSB-style closed-loop driver against real edge-node gRPC ----
+.PHONY: ycsb-smoke ycsb-a ycsb-b
+ycsb-smoke: build
+	./scripts/ycsb_smoke.sh
+ycsb-a: build
+	@test -n "$${TARGETS:-}" || (echo "set TARGETS=host:port,..." && exit 2)
+	./bin/ycsb -targets "$$TARGETS" -workload A -records 10000 \
+	    -concurrency 32 -duration 20s -sticky -value-size 128 \
+	    -out simulation/results/ycsb-a.json \
+	    -history-out simulation/results/ycsb-a.jsonl
+ycsb-b: build
+	@test -n "$${TARGETS:-}" || (echo "set TARGETS=host:port,..." && exit 2)
+	./bin/ycsb -targets "$$TARGETS" -workload B -records 10000 \
+	    -concurrency 32 -duration 20s -sticky -value-size 128 \
+	    -out simulation/results/ycsb-b.json \
+	    -history-out simulation/results/ycsb-b.jsonl
 
 # ---- docker ----
 .PHONY: docker-edge docker-cloud

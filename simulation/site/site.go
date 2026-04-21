@@ -91,6 +91,14 @@ type Stats struct {
 	EventsApplied   int64
 	EventsBuffered  int64
 	EventsDuplicate int64
+	// OutboxPending is the total number of (subscriber, event) pairs
+	// waiting to be shipped. A non-zero value means at least one peer
+	// has not yet received every local mutation.
+	OutboxPending int64
+	// InboxPending is the number of messages sitting in the receiver's
+	// channel that have not yet been popped and admitted to the buffer.
+	// Small (<= channel capacity) but non-zero during bursty traffic.
+	InboxPending int64
 }
 
 // Site is one simulated node.
@@ -273,6 +281,8 @@ func (s *Site) Stats() Stats {
 		EventsApplied:   s.applied.Load(),
 		EventsBuffered:  s.bufferedCount.Load(),
 		EventsDuplicate: s.duplicates.Load(),
+		OutboxPending:   int64(s.outbox.TotalPending()),
+		InboxPending:    int64(len(s.inbox)),
 	}
 }
 

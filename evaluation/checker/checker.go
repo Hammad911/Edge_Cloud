@@ -242,14 +242,27 @@ func checkReadYourWrites(events []Event, globalDeletes map[string]hlc.Timestamp)
 // site/session), we accept the tombstone because replication may
 // have carried the newer Delete back to the origin and superseded
 // the local Put.
+// checkNoStaleReadsAtOrigin verifies that any read issued at site S for
+// key K must observe every write at (S, K) whose response arrived
+// strictly before the read was issued. Writes that are concurrent with
+// the read are excluded, since the server is free to serialise them in
+// either order under linearisability.
+//
+// Concurrency window: a write W is considered "happens-before" a read R
+// iff W.IssuedAt + W.Latency <= R.IssuedAt (i.e. the client saw W's
+// response before sending R). Writes that overlap R's request are
+// ignored to avoid spurious failures under real gRPC concurrency.
 func checkNoStaleReadsAtOrigin(events []Event, globalDeletes map[string]hlc.Timestamp) []Violation {
 	var out []Violation
 	type key struct{ site, k string }
-	type writeInfo struct {
-		ts   hlc.Timestamp
-		kind OpKind
+	type writeEntry struct {
+		ts       hlc.Timestamp
+		kind     OpKind
+		finished int64 // IssuedAt.UnixNano() + Latency.Nanoseconds()
 	}
-	siteLastWrite := make(map[key]writeInfo)
+	// Completed writes per (site, key), sorted by finished time.
+	writes := make(map[key][]writeEntry)
+
 	for _, ev := range events {
 		k := key{ev.Site, ev.Key}
 		switch ev.Kind {
@@ -257,22 +270,44 @@ func checkNoStaleReadsAtOrigin(events []Event, globalDeletes map[string]hlc.Time
 			if ev.Err != "" {
 				continue
 			}
-			if cur, ok := siteLastWrite[k]; !ok || cur.ts.Before(ev.WriteTS) {
-				siteLastWrite[k] = writeInfo{ts: ev.WriteTS, kind: ev.Kind}
-			}
+			writes[k] = append(writes[k], writeEntry{
+				ts:       ev.WriteTS,
+				kind:     ev.Kind,
+				finished: ev.IssuedAt.UnixNano() + ev.Latency.Nanoseconds(),
+			})
 		case OpGet:
 			if ev.Err != "" {
 				continue
 			}
-			wrote, ok := siteLastWrite[k]
-			if !ok {
+			history := writes[k]
+			if len(history) == 0 {
 				continue
 			}
-			if ev.Deleted {
-				if wrote.kind == OpDelete {
+			readStart := ev.IssuedAt.UnixNano()
+
+			// Pick the latest write that fully completed before this
+			// read started. Everything after that is concurrent and may
+			// or may not be visible.
+			var latest writeEntry
+			var found bool
+			for _, w := range history {
+				if w.finished > readStart {
 					continue
 				}
-				if delTS, ok := globalDeletes[ev.Key]; ok && wrote.ts.Before(delTS) {
+				if !found || latest.ts.Before(w.ts) {
+					latest = w
+					found = true
+				}
+			}
+			if !found {
+				continue
+			}
+
+			if ev.Deleted {
+				if latest.kind == OpDelete {
+					continue
+				}
+				if delTS, ok := globalDeletes[ev.Key]; ok && latest.ts.Before(delTS) {
 					continue
 				}
 				out = append(out, Violation{
@@ -283,12 +318,12 @@ func checkNoStaleReadsAtOrigin(events []Event, globalDeletes map[string]hlc.Time
 					Seq:      ev.Seq,
 					Message: fmt.Sprintf(
 						"site %s held ts=%v locally but read returned tombstone on key %q",
-						ev.Site, wrote.ts, ev.Key,
+						ev.Site, latest.ts, ev.Key,
 					),
 				})
 				continue
 			}
-			if ev.WriteTS.Before(wrote.ts) {
+			if ev.WriteTS.Before(latest.ts) {
 				out = append(out, Violation{
 					Property: "no_stale_reads_at_origin",
 					Session:  ev.SessionID,
@@ -297,7 +332,7 @@ func checkNoStaleReadsAtOrigin(events []Event, globalDeletes map[string]hlc.Time
 					Seq:      ev.Seq,
 					Message: fmt.Sprintf(
 						"site %s held ts=%v locally but read returned ts=%v on key %q",
-						ev.Site, wrote.ts, ev.WriteTS, ev.Key,
+						ev.Site, latest.ts, ev.WriteTS, ev.Key,
 					),
 				})
 			}
