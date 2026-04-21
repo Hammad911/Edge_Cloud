@@ -171,6 +171,18 @@ ycsb-b: build
 	    -out simulation/results/ycsb-b.json \
 	    -history-out simulation/results/ycsb-b.jsonl
 
+# ---- paper figures ----
+# Regenerate the PNGs under docs/figures/ from the latest JSON sweeps in
+# simulation/results/. Requires matplotlib + numpy; a one-shot install is
+# available via `make figures-deps`. We invoke python through a login
+# shell so user-site packages (~/Library/Python on macOS) are discovered.
+.PHONY: figures figures-deps
+figures-deps:
+	bash -lc 'python3 -m pip install --user -r scripts/requirements.txt'
+figures:
+	@mkdir -p docs/figures
+	bash -lc 'python3 scripts/gen_figures.py'
+
 # ---- docker ----
 .PHONY: docker-edge docker-cloud
 docker-edge:

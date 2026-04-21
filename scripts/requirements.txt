@@ -1,0 +1,9 @@
+# Python dependencies for scripts/gen_figures.py
+#
+# Install with:
+#     python3 -m pip install --user -r scripts/requirements.txt
+#
+# Pinned to the versions used to generate the figures currently
+# committed under docs/figures/ so builds stay reproducible.
+matplotlib==3.9.4
+numpy==2.0.2
