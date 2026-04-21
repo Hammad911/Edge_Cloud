@@ -2,6 +2,7 @@ package fault_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"sync"
@@ -65,10 +66,11 @@ func TestRunner_PartitionHeal(t *testing.T) {
 	// Wait for the partition to take effect.
 	time.Sleep(40 * time.Millisecond)
 
-	// Message sent during partition must not arrive within the partition
-	// window.
-	if err := net.Send(src, dst, "during"); err != nil {
-		t.Fatalf("send during: %v", err)
+	// Message sent during partition must surface ErrPartitioned to
+	// the caller (so shippers can retry) and must not arrive within
+	// the partition window.
+	if err := net.Send(src, dst, "during"); !errors.Is(err, network.ErrPartitioned) {
+		t.Fatalf("send during: expected ErrPartitioned, got %v", err)
 	}
 	select {
 	case msg := <-inbox:

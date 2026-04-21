@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"edge-cloud-replication/pkg/hlc"
 	"edge-cloud-replication/simulation/site"
 )
 
@@ -122,11 +123,37 @@ type RunSpec struct {
 	// Hook is called after every applied op; nil means no callback.
 	// Hooks must be goroutine-safe.
 	Hook OpCallback
+	// Observer, if non-nil, receives a rich result for every op,
+	// including the value+timestamp returned by Gets. Used by the
+	// offline history recorder. Safe to pass nil.
+	Observer OpObserver
+	// PinSessions makes each worker goroutine talk to exactly one
+	// site for the entire run (round-robin assignment). This models
+	// the standard causal-consistency assumption where a logical
+	// session sticks to a replica. Without pinning, workers randomly
+	// hop between replicas, which is a legitimate anti-pattern that
+	// breaks monotonic-reads / read-your-writes guarantees whenever
+	// replication is still in flight.
+	PinSessions bool
 }
 
 // OpCallback observes each completed op for metrics or causality
 // tracking. Latency is wall-time of the local mutation (not replication).
 type OpCallback func(siteIdx int, op Op, latency time.Duration, err error)
+
+// OpResult captures everything the checker needs about a completed op:
+// for writes the HLC commit ts; for reads the value and the ts of the
+// observed version.
+type OpResult struct {
+	WriteTS  hlc.Timestamp
+	ReadValue []byte
+	ReadTS   hlc.Timestamp
+	Err      error
+}
+
+// OpObserver is invoked after every op with the full outcome. Must be
+// goroutine-safe; the workload runner calls it from many workers.
+type OpObserver func(siteIdx int, session string, op Op, latency time.Duration, res OpResult)
 
 // Result aggregates run-time statistics.
 type Result struct {
@@ -173,6 +200,8 @@ func Run(ctx context.Context, spec RunSpec) Result {
 				defer ticker.Stop()
 			}
 			rng := rand.New(rand.NewSource(int64(w*7919 + 1)))
+			session := fmt.Sprintf("w%04d", w)
+			pinnedIdx := w % len(spec.Sites)
 			for {
 				if ctx.Err() != nil {
 					return
@@ -185,18 +214,32 @@ func Run(ctx context.Context, spec RunSpec) Result {
 					}
 				}
 				op := spec.Generator.Next()
-				idx, st := pickSite(rng.Intn(len(spec.Sites)))
+				var (
+					idx int
+					st  *site.Site
+				)
+				if spec.PinSessions {
+					idx, st = pickSite(pinnedIdx)
+				} else {
+					idx, st = pickSite(rng.Intn(len(spec.Sites)))
+				}
 				t0 := time.Now()
-				var err error
+				var (
+					err     error
+					res     OpResult
+					gotVal  []byte
+					gotTS   hlc.Timestamp
+					writeTS hlc.Timestamp
+				)
 				switch op.Kind {
 				case OpPut:
-					_, err = st.Put(ctx, op.Key, op.Value)
+					writeTS, err = st.Put(ctx, op.Key, op.Value)
 					atomic.AddInt64(&puts, 1)
 				case OpDelete:
-					_, err = st.Delete(ctx, op.Key)
+					writeTS, err = st.Delete(ctx, op.Key)
 					atomic.AddInt64(&dels, 1)
 				case OpGet:
-					_, _, err = st.Get(ctx, op.Key)
+					gotVal, gotTS, err = st.Get(ctx, op.Key)
 					if err == site.ErrNotFound {
 						err = nil
 					}
@@ -207,8 +250,12 @@ func Run(ctx context.Context, spec RunSpec) Result {
 					atomic.AddInt64(&errs, 1)
 				}
 				atomic.AddInt64(&total, 1)
+				res = OpResult{WriteTS: writeTS, ReadValue: gotVal, ReadTS: gotTS, Err: err}
 				if spec.Hook != nil {
 					spec.Hook(idx, op, lat, err)
+				}
+				if spec.Observer != nil {
+					spec.Observer(idx, session, op, lat, res)
 				}
 			}
 		}()

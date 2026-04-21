@@ -9,6 +9,7 @@ coverage.html
 # simulator run artifacts (timestamped JSON + summary tables)
 simulation/results/*.json
 simulation/results/*.txt
+simulation/results/*.jsonl
 
 .DS_Store
 

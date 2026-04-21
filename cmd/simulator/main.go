@@ -25,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	evalchecker "edge-cloud-replication/evaluation/checker"
 	"edge-cloud-replication/pkg/causal"
 	"edge-cloud-replication/simulation/baselines"
 	"edge-cloud-replication/simulation/checker"
@@ -58,6 +59,9 @@ type flags struct {
 	faultPartitionAt       time.Duration
 	faultPartitionDuration time.Duration
 	faultPartitionFraction float64
+
+	historyOut  string
+	pinSessions bool
 }
 
 func parseFlags() flags {
@@ -82,6 +86,8 @@ func parseFlags() flags {
 	flag.DurationVar(&f.faultPartitionAt, "partition-at", 0, "offset from run start to isolate a subset of edges (0 disables)")
 	flag.DurationVar(&f.faultPartitionDuration, "partition-duration", 0, "how long the partition lasts; heals automatically afterwards")
 	flag.Float64Var(&f.faultPartitionFraction, "partition-fraction", 0.3, "fraction of edges to isolate during the partition window (0,1]")
+	flag.StringVar(&f.historyOut, "history-out", "", "if non-empty, write a JSONL history to this path for offline checking")
+	flag.BoolVar(&f.pinSessions, "pin-sessions", true, "pin each workload worker to one site (standard session-stickiness assumption for causal consistency)")
 	flag.Parse()
 	return f
 }
@@ -315,6 +321,21 @@ func main() {
 	defer progressCancel()
 	go progressLoop(progressCtx, f.progress, &localApplies, &remoteApplies, topo, lag)
 
+	// Offline history recorder. Nil when -history-out is empty, so the
+	// observer path stays free when we don't need it.
+	var (
+		history     evalchecker.Recorder
+		historyKeys sync.Map
+	)
+	if f.historyOut != "" {
+		rec, err := evalchecker.NewJSONLRecorder(f.historyOut)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "history-out: %v\n", err)
+			os.Exit(1)
+		}
+		history = rec
+	}
+
 	runStart := time.Now()
 	runRes := workload.Run(ctx, workload.RunSpec{
 		Sites:        topo.Sites(),
@@ -322,21 +343,65 @@ func main() {
 		Concurrency:  f.concurrency,
 		Duration:     f.duration,
 		QPSPerWorker: f.qpsPerWorker,
+		PinSessions:  f.pinSessions,
 		Hook: func(_ int, _ workload.Op, lat time.Duration, err error) {
 			localLat.Record(lat)
 			if phases != nil {
 				phases.RecordOp(lat, err == nil)
 			}
 		},
+		Observer: func(idx int, session string, op workload.Op, lat time.Duration, res workload.OpResult) {
+			if history == nil {
+				return
+			}
+			site := topo.Sites()[idx]
+			ev := evalchecker.Event{
+				SessionID: session,
+				Site:      string(site.Address()),
+				Key:       op.Key,
+				IssuedAt:  time.Now(),
+				Latency:   lat,
+			}
+			if res.Err != nil {
+				ev.Err = res.Err.Error()
+			}
+			switch op.Kind {
+			case workload.OpPut:
+				ev.Kind = evalchecker.OpPut
+				ev.Value = op.Value
+				ev.WriteTS = res.WriteTS
+			case workload.OpDelete:
+				ev.Kind = evalchecker.OpDelete
+				ev.Deleted = true
+				ev.WriteTS = res.WriteTS
+			case workload.OpGet:
+				ev.Kind = evalchecker.OpGet
+				ev.Value = res.ReadValue
+				ev.WriteTS = res.ReadTS
+				ev.Deleted = res.ReadValue == nil && res.Err == nil
+			}
+			historyKeys.Store(op.Key, struct{}{})
+			history.Record(ev)
+		},
 	})
 	progressCancel()
 
 	// For fault-injection runs the settle window has to span the post-heal
 	// convergence phase. Give the system at least the partition duration
-	// again to drain the backlog before we snapshot metrics.
+	// again to drain the backlog before we snapshot metrics. When we're
+	// also recording a history for offline checking we need to be even
+	// more generous, because convergence is one of the checked properties
+	// and any in-flight events at the moment we take the final snapshot
+	// would be flagged as divergence.
 	settleBudget := 5*f.wanLatency + 200*time.Millisecond
 	if faultEnabled {
 		settleBudget = f.faultPartitionDuration + 10*f.wanLatency + 500*time.Millisecond
+	}
+	if f.historyOut != "" {
+		historyBudget := 30*f.wanLatency + 2*time.Second
+		if historyBudget > settleBudget {
+			settleBudget = historyBudget
+		}
 	}
 	settleCtx, settleCancel := context.WithTimeout(context.Background(), settleBudget)
 	waitForDrainAndConverge(settleCtx, topo, lag, phases)
@@ -344,6 +409,51 @@ func main() {
 
 	if faultRunner != nil {
 		faultRunner.Stop()
+	}
+
+	// Final-state sweep. For every key any worker touched, read it on
+	// every site and emit a FinalSessionID event so the offline
+	// checker can verify convergence. Done after drain/converge so
+	// the post-partition backlog is fully absorbed.
+	//
+	// Additional safety margin: loop until every site's buffered
+	// causal queue is empty AND total remote-apply count has been
+	// stable for a few ticks. The shipper/deliverer pipeline has
+	// a 20ms tick, and the edge->cloud->edge fan-out requires two
+	// such hops, so we need a generous settling window.
+	if history != nil {
+		sites := topo.Sites()
+		if err := waitForAppliesQuiescent(context.Background(), sites, topo.Network, 5*time.Second); err != nil {
+			fmt.Fprintf(os.Stderr, "history quiesce: %v\n", err)
+		}
+		historyKeys.Range(func(k, _ any) bool {
+			key := k.(string)
+			for _, st := range sites {
+				val, ts, err := st.Get(ctx, key)
+				ev := evalchecker.Event{
+					SessionID: evalchecker.FinalSessionID,
+					Site:      string(st.Address()),
+					Key:       key,
+					Kind:      evalchecker.OpGet,
+					Value:     val,
+					WriteTS:   ts,
+					IssuedAt:  time.Now(),
+				}
+				switch {
+				case err == nil:
+					ev.Deleted = val == nil
+				case err == site.ErrNotFound:
+					ev.Deleted = true
+				default:
+					ev.Err = err.Error()
+				}
+				history.Record(ev)
+			}
+			return true
+		})
+		if err := history.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "history close: %v\n", err)
+		}
 	}
 
 	res := sceneResult{
@@ -463,6 +573,59 @@ func waitForDrainAndConverge(
 			} else {
 				stable = 0
 				prev = cur
+			}
+		}
+	}
+}
+
+// waitForAppliesQuiescent blocks until the whole replication pipeline
+// is quiet: the simulated network has stopped moving packets, every
+// site's causal buffer is empty, and the sum of shipped/received/
+// applied counters across sites has been unchanged for three
+// consecutive ticks. This is the strong-settlement barrier we need
+// before the final-state sweep - without it, convergence reads can
+// race against deferred applies and produce false divergences.
+func waitForAppliesQuiescent(ctx context.Context, sites []*site.Site, net *network.Network, budget time.Duration) error {
+	deadline := time.Now().Add(budget)
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+
+	snapshot := func() (int64, int64) {
+		var total, buffered int64
+		for _, st := range sites {
+			s := st.Stats()
+			total += s.EventsApplied + s.EventsReceived + s.EventsShipped +
+				s.LocalPuts + s.LocalDeletes
+			buffered += s.EventsBuffered
+		}
+		return total, buffered
+	}
+	stable := 0
+	prevTotal, _ := snapshot()
+	prevNet := net.Stats()
+	for {
+		if time.Now().After(deadline) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-tick.C:
+			curTotal, curBuffered := snapshot()
+			curNet := net.Stats()
+			inFlight := curNet.Sent - curNet.Delivered - curNet.Dropped
+			if curBuffered == 0 &&
+				curTotal == prevTotal &&
+				curNet.Sent == prevNet.Sent &&
+				inFlight == 0 {
+				stable++
+				if stable >= 3 {
+					return nil
+				}
+			} else {
+				stable = 0
+				prevTotal = curTotal
+				prevNet = curNet
 			}
 		}
 	}

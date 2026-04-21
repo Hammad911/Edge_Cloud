@@ -217,7 +217,7 @@ func (n *Network) Send(src, dst Address, payload any) error {
 		n.mu.Lock()
 		n.dropped++
 		n.mu.Unlock()
-		return nil
+		return ErrPartitioned
 	}
 	lp, ok := n.links[linkKey{from: src, to: dst}]
 	if !ok {
@@ -288,14 +288,20 @@ func (n *Network) scheduler() {
 
 		n.mu.RLock()
 		closed := n.closed
-		partitioned := n.partition[linkKey{from: next.msg.From, to: next.msg.To}]
 		inbox := n.sites[next.msg.To]
 		n.mu.RUnlock()
 
 		if closed {
 			return
 		}
-		if partitioned || inbox == nil {
+		// Note: we deliberately do NOT re-check partition state at
+		// delivery time. Send accepted this message while the link
+		// was healthy, and the shipper cannot retransmit in-flight
+		// packets that a late partition "cuts". Re-checking here
+		// would leak silent drops that no caller can compensate
+		// for. Partition-time drops happen at Send entry instead,
+		// where ErrPartitioned is returned and the caller retries.
+		if inbox == nil {
 			n.mu.Lock()
 			n.dropped++
 			n.mu.Unlock()
@@ -366,6 +372,11 @@ var ErrUnknownAddress = errors.New("network: unknown address")
 
 // ErrClosed is returned by Send after Close has been called.
 var ErrClosed = errors.New("network: closed")
+
+// ErrPartitioned is returned by Send when a partition is active on
+// the src->dst link. Senders that care about delivery should retry
+// until the partition heals.
+var ErrPartitioned = errors.New("network: link partitioned")
 
 func computeDelay(lp LinkProfile, rng *rand.Rand) time.Duration {
 	d := lp.MeanLatency

@@ -14,7 +14,7 @@ This is the implementation companion to the project proposal *Scalable Consisten
 
 Milestone 6 complete — an in-process discrete-event simulator now drives the same `pkg/causal`/`pkg/hlc`/`pkg/storage` stack across hub-and-spoke topologies of 10, 50, 100, and 500 edge sites. A scheduler-backed mock network injects per-link latency, jitter, loss, and partitions; workloads (uniform / Zipfian, configurable read-write mix) emit reproducible op streams; a runtime causality checker verifies that no remote apply ever violates partitioned-HLC dependencies. The latest scaling sweep (8s, 8 QPS/site) completes 0 violations across all four scales, with replication lag growing as the cloud hub becomes the bottleneck — exactly the behaviour the proposal aims to characterise.
 
-**Milestone 7 in progress** — fault-injection harness (`simulation/fault`) and metadata-size baselines (`simulation/baselines`) are live. A scheduled partition/heal runner drives the WAN bus while the simulator records per-phase (before / during / after) throughput, local-op latency, replication lag, and post-heal convergence time; sweeps across (10→50 sites) × (10%→50% partitioned edges) report **zero causality violations** and convergence bounded to ~6.2 s regardless of scale. The baselines module measures the metadata footprint of eventual / Lamport / partitioned-HLC / full vector clock against the same event stream: at 200 sites clustered into 8 groups, partitioned HLC uses **~12.6× less metadata per event** than a full vector clock.
+**Milestone 7 in progress** — fault-injection harness (`simulation/fault`), metadata-size baselines (`simulation/baselines`), and a Jepsen-style **offline history checker** (`evaluation/checker`) are live. A scheduled partition/heal runner drives the WAN bus while the simulator records per-phase (before / during / after) throughput, local-op latency, replication lag, and post-heal convergence time; sweeps across (10→50 sites) × (10%→50% partitioned edges) report **zero causality violations** and convergence bounded to ~6.2 s regardless of scale. The baselines module measures the metadata footprint of eventual / Lamport / partitioned-HLC / full vector clock against the same event stream: at 200 sites clustered into 8 groups, partitioned HLC uses **~12.6× less metadata per event** than a full vector clock. The offline checker replays every op the workload issued (with its HLC commit timestamp and session id) plus a post-quiescence convergence sweep, then verifies **monotonic reads, read-your-writes, no stale reads at origin, and eventual convergence** — all four pass both in a healthy 8-edge scene and under a 30%-edge partition with a 4 s fault window.
 
 What already works:
 - Structured logging (`log/slog`), JSON or text
@@ -218,6 +218,51 @@ smaller than a vector clock; at 200 sites it is 12.6× smaller. This is
 the paper's central scaling claim, grounded in the system's actual
 event stream.
 
+### Offline history checker (Milestone 7, part 3)
+
+`evaluation/checker` is a Jepsen-style post-hoc auditor. The simulator
+optionally streams a JSONL history of every op — with its session id,
+site, HLC commit timestamp, and (for reads) the version's timestamp —
+plus a per-site *final-state* sweep after the pipeline has fully
+drained. The checker replays that history and verifies four
+user-visible properties the paper promises:
+
+- **Monotonic reads** — for any (session, key), successive Gets see
+  non-decreasing commit timestamps.
+- **Read-your-writes** — after a session writes (k, v), any later Get
+  by that session sees that write or a strictly newer version (with
+  explicit tombstone-aware handling for cross-session deletes).
+- **No stale reads at origin** — a site that produced write (k, v)
+  must read back at least that write regardless of cross-cluster lag.
+- **Eventual convergence** — after quiescence, every site agrees on
+  the latest value for every key touched during the run.
+
+```bash
+make sim-check           # healthy 8-edge scene
+make sim-check-fault     # 30% of edges partitioned for 4 s mid-run
+./bin/checker -history simulation/results/history.jsonl -json
+```
+
+Representative verdicts (default config, `-pin-sessions` on for
+standard session-stickiness semantics):
+
+| scenario                    | events | MR  | RYW | origin | converge |
+|-----------------------------|-------:|:---:|:---:|:------:|:--------:|
+| healthy, 8 edges, 6 s       |  4 680 |  ✓  |  ✓  |   ✓    |    ✓     |
+| partition 30% × 4 s, 8 edges |  7 544 |  ✓  |  ✓  |   ✓    |    ✓     |
+
+Writing the checker surfaced **three real replication bugs in the
+simulator that the runtime HLC-dependency check could not see**:
+(1) the shipper advanced its cursor even when the network returned a
+send error, so all traffic emitted during a partition was silently
+discarded; (2) the outbox pruned events based on `Next()` return,
+racing with shipper retries and deleting events that hadn't actually
+been delivered yet; (3) the network scheduler re-checked partition
+state at delivery time, losing messages that were already in flight
+when the partition started. Each fix was validated by the checker
+re-running on the same history and flipping the relevant property
+from FAIL → PASS.
+
 ---
 
 ## Configuration
@@ -282,6 +327,8 @@ docs/                # Architecture notes and final report material
 | `make sim-fault-demo` | Single-partition demo with phase-aware metrics |
 | `make sim-fault` | Sweep partition scenarios across site counts and fractions |
 | `make sim-baselines` | Metadata-per-event comparison vs. eventual / Lamport / vector clock |
+| `make sim-check` | Record a history from a healthy run and audit MR / RYW / origin / convergence |
+| `make sim-check-fault` | Same, with a mid-run network partition of 30% of the edges |
 | `make test` | Race-enabled test suite |
 | `make cover` | Test with coverage + HTML report |
 | `make lint` | Run `golangci-lint` |
@@ -317,6 +364,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 7. **Evaluation** — Milestone 7 in progress:
    - ~~Fault-injection harness (`simulation/fault`) + phase-aware metrics~~ ✓
    - ~~Metadata-size baselines (eventual / Lamport / vector clock) with clustering projection~~ ✓
+   - ~~Offline history checker (`evaluation/checker`) — MR, RYW, origin freshness, convergence~~ ✓
    - Offline history checker (monotonic reads, read-your-writes, convergence) — *next*
    - YCSB-style closed-loop driver for the real gRPC binaries
    - Paper figures generated from JSON results

@@ -183,6 +183,13 @@ func (o *Outbox) Unsubscribe(name string) {
 // Next blocks until an event with id > cursor is available for the named
 // subscriber, then returns the next such event and the new cursor. Returns
 // nil, 0, ctx.Err() when the context is cancelled or the outbox is closed.
+//
+// Next DOES NOT advance the subscriber's prune watermark - that happens in
+// Ack once the caller confirms delivery. Driving prune from Next would mean
+// a subscriber that observed an event but failed to ship it (partition,
+// network error, crash mid-send) could see its event pruned before the
+// retry finds it, silently losing the write. Callers that never retry
+// can call Ack immediately after Next to preserve the old semantics.
 func (o *Outbox) Next(ctx context.Context, name string, cursor uint64) (*Event, uint64, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -197,15 +204,24 @@ func (o *Outbox) Next(ctx context.Context, name string, cursor uint64) (*Event, 
 		if err := ctx.Err(); err != nil {
 			return nil, cursor, err
 		}
-		// Find the first entry with id > cursor.
 		for _, entry := range o.events {
 			if entry.id > cursor {
-				o.subscribers[name] = entry.id
-				o.pruneLocked()
 				return entry.ev, entry.id, nil
 			}
 		}
 		o.cond.Wait()
+	}
+}
+
+// Ack advances the named subscriber's prune watermark to id. Callers
+// should invoke Ack after a successful send so the outbox can garbage-
+// collect events every subscriber has durably received.
+func (o *Outbox) Ack(name string, id uint64) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if cur, ok := o.subscribers[name]; ok && cur < id {
+		o.subscribers[name] = id
+		o.pruneLocked()
 	}
 }
 

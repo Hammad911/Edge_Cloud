@@ -6,7 +6,7 @@ LDFLAGS := -X edge-cloud-replication/internal/app.Version=$(VERSION) -s -w
 
 BIN_DIR := bin
 
-BINARIES := edge-node cloud-node kvsmoke simulator
+BINARIES := edge-node cloud-node kvsmoke simulator checker
 
 .PHONY: all
 all: build
@@ -133,6 +133,26 @@ sim-fault-demo: build
 .PHONY: sim-baselines
 sim-baselines: build
 	./scripts/sim_baselines.sh
+
+# Offline consistency checker: run the simulator with -history-out,
+# then audit the recorded history for monotonic reads, read-your-
+# writes, origin freshness, and convergence.
+.PHONY: sim-check sim-check-fault
+sim-check: build
+	@mkdir -p simulation/results
+	./bin/simulator -sites 8 -duration 6s -qps 30 -concurrency 16 \
+	    -keys 200 -write-ratio 0.4 -wan-latency 20ms -progress 0 \
+	    -history-out simulation/results/history.jsonl \
+	    -out simulation/results/history_run.json
+	./bin/checker -history simulation/results/history.jsonl
+sim-check-fault: build
+	@mkdir -p simulation/results
+	./bin/simulator -sites 8 -duration 12s -qps 30 -concurrency 16 \
+	    -keys 200 -write-ratio 0.4 -wan-latency 20ms -progress 0 \
+	    -partition-at 3s -partition-duration 4s -partition-fraction 0.3 \
+	    -history-out simulation/results/history_fault.jsonl \
+	    -out simulation/results/history_fault_run.json
+	./bin/checker -history simulation/results/history_fault.jsonl
 
 # ---- docker ----
 .PHONY: docker-edge docker-cloud

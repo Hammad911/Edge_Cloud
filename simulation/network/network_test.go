@@ -1,6 +1,7 @@
 package network
 
 import (
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -41,8 +42,8 @@ func TestNetwork_PartitionDropsBoth(t *testing.T) {
 	n.Partition("a", "b")
 	defer n.Heal("a", "b")
 
-	if err := n.Send("a", "b", "x"); err != nil {
-		t.Fatalf("send: %v", err)
+	if err := n.Send("a", "b", "x"); !errors.Is(err, ErrPartitioned) {
+		t.Fatalf("partitioned send should return ErrPartitioned, got %v", err)
 	}
 	select {
 	case <-b:

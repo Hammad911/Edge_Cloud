@@ -289,20 +289,41 @@ func (s *Site) runShipper(ctx context.Context, peer network.Address) {
 	defer s.outbox.Unsubscribe(subName)
 
 	cursor := uint64(0)
+	backoff := 10 * time.Millisecond
+	const maxBackoff = 500 * time.Millisecond
 	for {
 		ev, newCursor, err := s.outbox.Next(ctx, subName, cursor)
 		if err != nil {
 			return
 		}
 		if err := s.net.Send(s.cfg.Address, peer, ev); err != nil {
-			s.logger.Debug("network send failed",
+			// Send failed - typically the link to `peer` is
+			// partitioned or the network dropped the packet. Do
+			// NOT advance the cursor; back off and retry the same
+			// event until the link heals or the context dies.
+			// Dropping here silently was the old behaviour and
+			// caused permanent data loss across partitions.
+			s.logger.Debug("network send failed; will retry",
 				slog.String("peer", string(peer)),
 				slog.Any("err", err),
 			)
-		} else {
-			s.shipped.Add(1)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			if backoff < maxBackoff {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
+			continue
 		}
+		s.shipped.Add(1)
 		cursor = newCursor
+		s.outbox.Ack(subName, newCursor)
+		backoff = 10 * time.Millisecond
 	}
 }
 
