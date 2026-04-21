@@ -8,6 +8,8 @@ Prototype of a two-tier distributed store with **Raft inside each edge cluster**
 
 This is the implementation companion to the project proposal *Scalable Consistency in Edge–Cloud Replication* (Distributed Systems, Spring 2026).
 
+> **Graders / reviewers:** the full system-design report, evaluation, and C-6 novelty justification are at **[`docs/REPORT.md`](docs/REPORT.md)** — one document that covers Deliverable 2 and Deliverable 3 end to end.
+
 ---
 
 ## Status
