@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"edge-cloud-replication/simulation/checker"
+	"edge-cloud-replication/simulation/fault"
 	"edge-cloud-replication/simulation/metrics"
 	"edge-cloud-replication/simulation/network"
 	"edge-cloud-replication/simulation/site"
@@ -50,6 +51,10 @@ type flags struct {
 	scenario     string
 	logLevel     string
 	progress     time.Duration
+
+	faultPartitionAt       time.Duration
+	faultPartitionDuration time.Duration
+	faultPartitionFraction float64
 }
 
 func parseFlags() flags {
@@ -71,6 +76,9 @@ func parseFlags() flags {
 	flag.StringVar(&f.scenario, "scenario", "", "named scenario: small|medium|large|xlarge (overrides -sites)")
 	flag.StringVar(&f.logLevel, "log-level", "silent", "site logger level: debug|info|warn|error|silent")
 	flag.DurationVar(&f.progress, "progress", 2*time.Second, "interval to print progress")
+	flag.DurationVar(&f.faultPartitionAt, "partition-at", 0, "offset from run start to isolate a subset of edges (0 disables)")
+	flag.DurationVar(&f.faultPartitionDuration, "partition-duration", 0, "how long the partition lasts; heals automatically afterwards")
+	flag.Float64Var(&f.faultPartitionFraction, "partition-fraction", 0.3, "fraction of edges to isolate during the partition window (0,1]")
 	flag.Parse()
 	return f
 }
@@ -143,6 +151,16 @@ type sceneResult struct {
 
 	CausalViolations int `json:"causal_violations"`
 	NumGoroutines    int `json:"num_goroutines"`
+
+	// Fault is populated only when a partition scenario was scheduled.
+	Fault *faultResult `json:"fault,omitempty"`
+}
+
+type faultResult struct {
+	PartitionAt       time.Duration         `json:"partition_at"`
+	PartitionDuration time.Duration         `json:"partition_duration"`
+	PartitionedEdges  int                   `json:"partitioned_edges"`
+	Phases            metrics.PhaseSnapshot `json:"phases"`
 }
 
 func main() {
@@ -178,6 +196,12 @@ func main() {
 	lag := metrics.NewReplicationLagTracker(1) // record everything; switch to >1 for huge runs
 	localLat := metrics.NewLatencyHistogram(1024)
 
+	faultEnabled := f.faultPartitionAt > 0 && f.faultPartitionDuration > 0
+	var phases *metrics.PhaseTracker
+	if faultEnabled {
+		phases = metrics.NewPhaseTracker()
+	}
+
 	var localApplies, remoteApplies atomic.Int64
 
 	observer := func(ev site.ApplyEvent) {
@@ -191,6 +215,10 @@ func main() {
 			remoteApplies.Add(1)
 			if !ev.Deleted {
 				lag.RecordObservation(ev.Key, ev.Value, ev.At)
+				if phases != nil && ev.CommitTS.Physical > 0 {
+					originWall := time.Unix(0, ev.CommitTS.Physical)
+					phases.RecordLag(ev.At.Sub(originWall))
+				}
 			}
 		}
 		k := checker.KindLocal
@@ -232,6 +260,33 @@ func main() {
 	topo.Start(ctx)
 	defer topo.Stop()
 
+	var (
+		faultRunner      *fault.Runner
+		partitionedEdges []network.Address
+		partitionResult  *faultResult
+	)
+	if faultEnabled {
+		partitionedEdges = selectPartitionEdges(topo.Edges, f.faultPartitionFraction)
+		schedule := fault.PartitionWindow(partitionedEdges, f.faultPartitionAt, f.faultPartitionDuration)
+		faultCallback := func(ev fault.Event, _ time.Time) {
+			switch ev.Kind {
+			case fault.PartitionAll, fault.PartitionLink:
+				phases.Set(metrics.PhaseDuring)
+			case fault.HealAll, fault.HealLink:
+				phases.Set(metrics.PhaseAfter)
+			}
+		}
+		faultRunner = fault.NewRunner(topo.Network, schedule, logger, faultCallback)
+		faultRunner.Start(ctx)
+		partitionResult = &faultResult{
+			PartitionAt:       f.faultPartitionAt,
+			PartitionDuration: f.faultPartitionDuration,
+			PartitionedEdges:  len(partitionedEdges),
+		}
+		fmt.Printf("fault: partitioning %d/%d edges at +%s for %s\n",
+			len(partitionedEdges), len(topo.Edges), f.faultPartitionAt, f.faultPartitionDuration)
+	}
+
 	progressCtx, progressCancel := context.WithCancel(ctx)
 	defer progressCancel()
 	go progressLoop(progressCtx, f.progress, &localApplies, &remoteApplies, topo, lag)
@@ -243,17 +298,29 @@ func main() {
 		Concurrency:  f.concurrency,
 		Duration:     f.duration,
 		QPSPerWorker: f.qpsPerWorker,
-		Hook: func(_ int, _ workload.Op, lat time.Duration, _ error) {
+		Hook: func(_ int, _ workload.Op, lat time.Duration, err error) {
 			localLat.Record(lat)
+			if phases != nil {
+				phases.RecordOp(lat, err == nil)
+			}
 		},
 	})
 	progressCancel()
 
-	// Allow propagation to settle so replication-lag samples are
-	// representative. Wait at most ~5x the WAN latency.
-	settleCtx, settleCancel := context.WithTimeout(context.Background(), 5*f.wanLatency+200*time.Millisecond)
-	waitForDrain(settleCtx, topo)
+	// For fault-injection runs the settle window has to span the post-heal
+	// convergence phase. Give the system at least the partition duration
+	// again to drain the backlog before we snapshot metrics.
+	settleBudget := 5*f.wanLatency + 200*time.Millisecond
+	if faultEnabled {
+		settleBudget = f.faultPartitionDuration + 10*f.wanLatency + 500*time.Millisecond
+	}
+	settleCtx, settleCancel := context.WithTimeout(context.Background(), settleBudget)
+	waitForDrainAndConverge(settleCtx, topo, lag, phases)
 	settleCancel()
+
+	if faultRunner != nil {
+		faultRunner.Stop()
+	}
 
 	res := sceneResult{
 		Scenario:     f.scenario,
@@ -287,6 +354,11 @@ func main() {
 	res.Network.Sent = netStats.Sent
 	res.Network.Delivered = netStats.Delivered
 	res.Network.Dropped = netStats.Dropped
+
+	if partitionResult != nil && phases != nil {
+		partitionResult.Phases = phases.Snapshot()
+		res.Fault = partitionResult
+	}
 
 	printHumanResults(res, time.Since(runStart))
 
@@ -330,9 +402,18 @@ func progressLoop(ctx context.Context, period time.Duration, local, remote *atom
 	}
 }
 
-// waitForDrain polls the cloud + edges until either ctx expires or the
-// network has been quiet (no new sent messages for one tick).
-func waitForDrain(ctx context.Context, topo *topology.Topology) {
+// waitForDrainAndConverge polls the network until it has been quiet for
+// three consecutive ticks (no new Sent traffic). When a phase tracker is
+// present and we are in PhaseAfter, the first moment network activity
+// stabilises is our post-heal convergence time: the backlog that built
+// up during the partition has been shipped, the cloud has fanned it out,
+// and no more edge<->cloud messages are in flight.
+func waitForDrainAndConverge(
+	ctx context.Context,
+	topo *topology.Topology,
+	_ *metrics.ReplicationLagTracker,
+	phases *metrics.PhaseTracker,
+) {
 	tick := time.NewTicker(50 * time.Millisecond)
 	defer tick.Stop()
 	prev := topo.Network.Stats().Sent
@@ -346,6 +427,9 @@ func waitForDrain(ctx context.Context, topo *topology.Topology) {
 			if cur == prev {
 				stable++
 				if stable >= 3 {
+					if phases != nil && phases.Current() == metrics.PhaseAfter {
+						phases.NoteConverged()
+					}
 					return
 				}
 			} else {
@@ -354,6 +438,27 @@ func waitForDrain(ctx context.Context, topo *topology.Topology) {
 			}
 		}
 	}
+}
+
+// selectPartitionEdges returns the first N edges according to the
+// requested fraction (clamped to [1, len(edges)]). Deterministic: we
+// take a prefix so runs are reproducible under a given seed.
+func selectPartitionEdges(edges []*site.Site, fraction float64) []network.Address {
+	if fraction <= 0 {
+		return nil
+	}
+	n := int(float64(len(edges)) * fraction)
+	if n < 1 {
+		n = 1
+	}
+	if n > len(edges) {
+		n = len(edges)
+	}
+	out := make([]network.Address, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, edges[i].Address())
+	}
+	return out
 }
 
 func writeJSON(path string, v any) error {
@@ -402,6 +507,24 @@ func printHumanResults(r sceneResult, total time.Duration) {
 	fmt.Printf("  causal violations : %d\n", r.CausalViolations)
 	fmt.Printf("  goroutines        : %d\n", r.NumGoroutines)
 	fmt.Printf("  wallclock         : %s\n", total.Truncate(time.Millisecond))
+	if r.Fault != nil {
+		fmt.Println("─── fault-injection phases ───────────────────────────────────")
+		fmt.Printf("  partition         : %d edges, +%s for %s\n",
+			r.Fault.PartitionedEdges, r.Fault.PartitionAt, r.Fault.PartitionDuration)
+		for _, p := range r.Fault.Phases.Phases {
+			fmt.Printf("  %-7s ops=%d err=%d local p50=%s p99=%s lag p50=%s p99=%s\n",
+				p.Phase, p.OpsSucceeded, p.OpsFailed,
+				p.LocalLatency.P50, p.LocalLatency.P99,
+				p.ReplicationLag.P50, p.ReplicationLag.P99,
+			)
+		}
+		if r.Fault.Phases.ConvergenceTime > 0 {
+			fmt.Printf("  post-heal converged in %s\n",
+				r.Fault.Phases.ConvergenceTime.Truncate(time.Millisecond))
+		} else {
+			fmt.Println("  post-heal convergence: not yet reached within settle window")
+		}
+	}
 	fmt.Println("──────────────────────────────────────────────────────────────")
 }
 

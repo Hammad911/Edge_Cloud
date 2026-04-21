@@ -14,6 +14,8 @@ This is the implementation companion to the project proposal *Scalable Consisten
 
 Milestone 6 complete — an in-process discrete-event simulator now drives the same `pkg/causal`/`pkg/hlc`/`pkg/storage` stack across hub-and-spoke topologies of 10, 50, 100, and 500 edge sites. A scheduler-backed mock network injects per-link latency, jitter, loss, and partitions; workloads (uniform / Zipfian, configurable read-write mix) emit reproducible op streams; a runtime causality checker verifies that no remote apply ever violates partitioned-HLC dependencies. The latest scaling sweep (8s, 8 QPS/site) completes 0 violations across all four scales, with replication lag growing as the cloud hub becomes the bottleneck — exactly the behaviour the proposal aims to characterise.
 
+**Milestone 7 in progress** — fault-injection harness (`simulation/fault`) is live. A scheduled partition/heal runner drives the WAN bus while the simulator records per-phase (before / during / after) throughput, local-op latency, replication lag, and post-heal convergence time. Sweeps across (10→50 sites) × (10%→50% partitioned edges) report **zero causality violations across every combination** and convergence bounded to ~6.2 s regardless of scale.
+
 What already works:
 - Structured logging (`log/slog`), JSON or text
 - Typed config via Viper with env-var overrides (`ECR_*`)
@@ -155,6 +157,34 @@ violates partitioned-HLC dependencies. Representative scaling numbers
 |   100 | ~1 580  |  72 ms  | 138 ms  | 188 ms  |      0     |
 |   500 | ~7 570  | 1.68 s  | 5.63 s  | 5.95 s  |      0     |
 
+### Fault-injection scenarios (Milestone 7, part 1)
+
+`simulation/fault` ships a scheduler that applies `Partition` / `Heal`
+events to the in-process WAN at configurable offsets. The simulator then
+tags every operation with its *phase* (before / during / after the
+partition window) and reports per-phase throughput, local-op latency,
+and replication lag, plus the post-heal convergence time.
+
+```bash
+make sim-fault-demo        # 20 edges, 30% partitioned for 4s, 15ms WAN
+make sim-fault             # full (sites × fraction) sweep via sim_fault.sh
+```
+
+Representative sweep (partition at +4s, heal at +9s, 15ms WAN, 50 QPS):
+
+| sites | fraction | lag p99 before | during | after | convergence | violations |
+|------:|:--------:|---------------:|-------:|------:|------------:|-----------:|
+|    10 |   0.1    |       35.7 ms  | 40.7 ms | 38.8 ms | 6.15 s |   **0** |
+|    10 |   0.5    |       36.6 ms  | 35.7 ms | 42.7 ms | 6.20 s |   **0** |
+|    20 |   0.3    |       35.9 ms  | 87.6 ms | 66.0 ms | 6.20 s |   **0** |
+|    50 |   0.1    |       50.2 ms  | 88.1 ms | 213.4 ms | 6.28 s | **0** |
+|    50 |   0.5    |       69.0 ms  | 56.6 ms | 106.8 ms | 6.22 s | **0** |
+
+Local-op latency remains sub-millisecond across every phase (writes
+never block on the WAN) and **zero causality violations are observed
+throughout** — the partitioned HLC keeps the buffer honest even while a
+third of the edges are isolated.
+
 ---
 
 ## Configuration
@@ -216,6 +246,8 @@ docs/                # Architecture notes and final report material
 | `make causal-up` / `make causal-down` | Launch/stop a 1-cloud + 2-edge causal-replication topology |
 | `make sim-small|medium|large|xlarge` | Run the in-process simulator at 10/50/100/500 sites |
 | `make sim-scaling` | Run the scaling sweep and emit per-scale JSON + summary table |
+| `make sim-fault-demo` | Single-partition demo with phase-aware metrics |
+| `make sim-fault` | Sweep partition scenarios across site counts and fractions |
 | `make test` | Race-enabled test suite |
 | `make cover` | Test with coverage + HTML report |
 | `make lint` | Run `golangci-lint` |
@@ -248,4 +280,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 4. ~~**Raft** in `pkg/raft` (in-cluster consensus)~~ ✓ *Milestone 3*
 5. ~~**Causal replication** in `pkg/causal` (cross-cluster)~~ ✓ *Milestone 5*
 6. ~~**Simulator** in `simulation/` (10 → 500 edge sites)~~ ✓ *Milestone 6*
-7. **Evaluation** — YCSB, fault injection, Jepsen-style checker — *next*
+7. **Evaluation** — Milestone 7 in progress:
+   - ~~Fault-injection harness (`simulation/fault`) + phase-aware metrics~~ ✓
+   - Baselines (eventual, full vector clock) for scaling comparison — *next*
+   - Offline history checker (monotonic reads, read-your-writes, convergence)
+   - YCSB-style closed-loop driver for the real gRPC binaries
+   - Paper figures generated from JSON results

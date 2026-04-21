@@ -117,6 +117,16 @@ sim-xlarge: build
 sim-scaling: build
 	./scripts/sim_scaling.sh
 
+# Fault-injection: sweep partition scenarios and emit per-phase metrics.
+.PHONY: sim-fault sim-fault-demo
+sim-fault: build
+	./scripts/sim_fault.sh
+sim-fault-demo: build
+	./bin/simulator -sites 20 -duration 12s -partition-at 3s -partition-duration 4s \
+	    -partition-fraction 0.3 -wan-latency 15ms -concurrency 20 -qps 50 \
+	    -keys 500 -write-ratio 0.4 -progress 0 \
+	    -out simulation/results/fault_demo.json
+
 # ---- docker ----
 .PHONY: docker-edge docker-cloud
 docker-edge:
